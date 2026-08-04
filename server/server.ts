@@ -185,6 +185,29 @@ io.on('connection', (socket) => {
         }
       });
 
+      // ギフトイベントの監視
+      tiktokConnect.on('gift', (data: any) => {
+        const nickname = data.nickname || data.uniqueId;
+        const uniqueId = data.uniqueId;
+        const profilePictureUrl = data.profilePictureUrl;
+        const giftName = data.giftName;
+        const diamondCount = data.diamondCount || 0;
+        const repeatCount = data.repeatCount || 1;
+
+        console.log(`Received gift: ${giftName} x${repeatCount} from ${nickname} (Diamonds: ${diamondCount})`);
+
+        socket.emit('gift-log', {
+          id: data.msgId || Math.random().toString(),
+          username: nickname,
+          userId: uniqueId,
+          profilePictureUrl,
+          giftName,
+          diamonds: diamondCount * repeatCount,
+          count: repeatCount,
+          timestamp: Date.now()
+        });
+      });
+
       // エラーイベントの監視
       tiktokConnect.on('error', (err: any) => {
         console.error(`TikTok Live error for ${username}:`, err);
@@ -313,6 +336,37 @@ io.on('connection', (socket) => {
         timestamp
       });
     }
+  });
+
+  // テスト用：模擬ギフト送信
+  socket.on('send-mock-gift', () => {
+    const mockUsers = [
+      { name: 'さくら🌸', id: 'sakura_live', pic: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=80&fit=crop&q=80' },
+      { name: 'ゆうき✨', id: 'yuki_travel', pic: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=80&fit=crop&q=80' },
+      { name: 'みく🍀', id: 'miku_deco', pic: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=80&fit=crop&q=80' }
+    ];
+    const randomUser = mockUsers[Math.floor(Math.random() * mockUsers.length)];
+    const id = Math.random().toString();
+    const gifts = [
+      { name: '薔薇', diamonds: 1 },
+      { name: 'いいね', diamonds: 5 },
+      { name: 'ハート', diamonds: 10 },
+      { name: 'TikTok', diamonds: 100 },
+      { name: '手作りの愛', diamonds: 500 }
+    ];
+    const randomGift = gifts[Math.floor(Math.random() * gifts.length)];
+    const count = Math.floor(Math.random() * 5) + 1;
+
+    socket.emit('gift-log', {
+      id,
+      username: randomUser.name,
+      userId: randomUser.id,
+      profilePictureUrl: randomUser.pic,
+      giftName: randomGift.name,
+      diamonds: randomGift.diamonds * count,
+      count,
+      timestamp: Date.now()
+    });
   });
 
   socket.on('disconnect', () => {
