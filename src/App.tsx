@@ -118,6 +118,72 @@ interface TtsSpeechItem {
   timestamp: number
 }
 
+interface PredictedQuestion {
+  label: string
+  text: string
+  color: string
+}
+
+const suggestFortuneQuestion = (comment: string): PredictedQuestion => {
+  const text = comment.toLowerCase()
+  
+  if (text.includes('仕事') || text.includes('転職') || text.includes('就職') || text.includes('キャリア') || text.includes('会社') || text.includes('退職') || text.includes('上司') || text.includes('同僚')) {
+    return {
+      label: '💼 仕事の相談',
+      text: '現在の仕事運と、今後の適職や転職すべき最適なタイミングについて',
+      color: 'border-amber-200 bg-amber-50/50 text-amber-800 hover:bg-amber-100'
+    }
+  }
+  if (text.includes('相性') || text.includes('彼') || text.includes('旦那') || text.includes('夫') || text.includes('彼女') || text.includes('好きな人') || text.includes('片思い') || text.includes('恋')) {
+    return {
+      label: '👩‍❤️‍👨 相性の相談',
+      text: 'お相手との宿命的な相性と、今後の関係性の発展・対策について',
+      color: 'border-rose-200 bg-rose-50/50 text-rose-800 hover:bg-rose-100'
+    }
+  }
+  if (text.includes('結婚') || text.includes('出会い') || text.includes('婚活') || text.includes('恋愛') || text.includes('恋人') || text.includes('パートナー')) {
+    return {
+      label: '❤️ 恋愛・結婚の相談',
+      text: 'これからの恋愛運・結婚運と、素敵な出会いが訪れる時期について',
+      color: 'border-pink-200 bg-pink-50/50 text-pink-800 hover:bg-pink-100'
+    }
+  }
+  if (text.includes('金運') || text.includes('お金') || text.includes('投資') || text.includes('財産') || text.includes('貯金') || text.includes('副業')) {
+    return {
+      label: '💸 金運・財運の相談',
+      text: 'これからの金運・財運の流れと、お金を引き寄せるヒントについて',
+      color: 'border-yellow-200 bg-yellow-50/50 text-yellow-800 hover:bg-yellow-100'
+    }
+  }
+  if (text.includes('家族') || text.includes('子供') || text.includes('娘') || text.includes('息子') || text.includes('親') || text.includes('家庭') || text.includes('パパ') || text.includes('ママ')) {
+    return {
+      label: '🏠 家族の相談',
+      text: 'ご家族の運勢の流れと、家庭内の関係性を良くするためのアドバイスについて',
+      color: 'border-blue-200 bg-blue-50/50 text-blue-800 hover:bg-blue-100'
+    }
+  }
+  if (text.includes('健康') || text.includes('病気') || text.includes('体調') || text.includes('ストレス') || text.includes('メンタル') || text.includes('疲')) {
+    return {
+      label: '🏥 健康の相談',
+      text: '今後の健康運と、心身のバランスを保ち健やかに生きるためのアドバイスについて',
+      color: 'border-green-200 bg-green-50/50 text-green-800 hover:bg-green-100'
+    }
+  }
+  if (text.includes('対人') || text.includes('人間関係') || text.includes('友人') || text.includes('友達') || text.includes('悩み')) {
+    return {
+      label: '👥 人間関係の相談',
+      text: '周囲との人間関係の悩みと、円滑なコミュニケーションを築くためのヒントについて',
+      color: 'border-purple-200 bg-purple-50/50 text-purple-800 hover:bg-purple-100'
+    }
+  }
+  
+  return {
+    label: '🔮 全体運の相談',
+    text: '今年の全体的な運勢の流れと、今後の開運アクションについて',
+    color: 'border-gold-200 bg-gold-50/50 text-gold-800 hover:bg-gold-100'
+  }
+}
+
 export default function App() {
   const [socket, setSocket] = useState<Socket | null>(null)
   
@@ -318,7 +384,7 @@ export default function App() {
                 profilePictureUrl: msg.profilePictureUrl,
                 birthdate: combinedBirth,
                 comment: msg.comment,
-                fortuneQuestion: msg.comment,
+                fortuneQuestion: suggestFortuneQuestion(msg.comment).text,
                 timestamp: Date.now(),
                 status: 'pending',
                 isRegularMatch: true
@@ -344,7 +410,7 @@ export default function App() {
     newSocket.on('detected-fortune-request', (req: Omit<FortuneRequest, 'status'>) => {
       setFortuneRequests(prev => {
         if (prev.some(item => item.id === req.id)) return prev
-        return [...prev, { ...req, status: 'pending' }]
+        return [...prev, { ...req, status: 'pending', fortuneQuestion: suggestFortuneQuestion(req.comment).text }]
       })
 
       // 初回検知時または未登録ユーザーの場合に常連データを一時保存（生年月日紐付けのため）
@@ -1235,33 +1301,34 @@ ${res.advice}
                           />
                           
                           {/* クイック選択候補 */}
-                          <div className="flex flex-wrap gap-1 mt-1 max-h-[50px] overflow-y-auto pr-1">
-                            {/* 汎用お悩み候補 */}
-                            {['🔮全体運', '💼仕事・転職', '❤️恋愛・相性', '💸金運', '👥人間関係'].map(opt => (
-                              <button
-                                key={opt}
-                                onClick={() => handleUpdateQuestion(req.id, opt)}
-                                className="px-1.5 py-0.5 rounded text-[8px] font-bold border border-gold-200 bg-gold-50/50 text-gold-800 hover:bg-gold-100 transition-colors"
-                              >
-                                {opt}
-                              </button>
-                            ))}
-                            {/* ユーザーの過去チャットから候補を自動抽出して並べる */}
+                          <div className="flex flex-wrap gap-1 mt-1 max-h-[60px] overflow-y-auto pr-1">
+                            {/* デフォルト用の全体運ボタン */}
+                            <button
+                              onClick={() => handleUpdateQuestion(req.id, '今年の全体的な運勢の流れと、今後の開運アクションについて')}
+                              className="px-1.5 py-0.5 rounded text-[8px] font-bold border border-gold-200 bg-gold-50/50 text-gold-800 hover:bg-gold-100 transition-colors"
+                            >
+                              🔮 全体運の相談
+                            </button>
+                            
+                            {/* リスナーのチャット履歴から自動でお悩み内容を推測して並べる */}
                             {chatLogs
                               .filter(log => log.userId === req.userId)
                               .map(log => log.comment)
                               .reverse()
-                              .slice(0, 3)
-                              .map((comm, idx) => (
-                                <button
-                                  key={idx}
-                                  onClick={() => handleUpdateQuestion(req.id, comm)}
-                                  className="px-1.5 py-0.5 rounded text-[8px] border border-beige-200 bg-white text-muted-foreground hover:bg-beige-50 transition-colors truncate max-w-[120px]"
-                                  title={comm}
-                                >
-                                  💬 {comm}
-                                </button>
-                              ))
+                              .slice(0, 4)
+                              .map((comm, idx) => {
+                                const prediction = suggestFortuneQuestion(comm)
+                                return (
+                                  <button
+                                    key={idx}
+                                    onClick={() => handleUpdateQuestion(req.id, prediction.text)}
+                                    className={`px-1.5 py-0.5 rounded text-[8px] font-bold border transition-colors ${prediction.color}`}
+                                    title={prediction.text}
+                                  >
+                                    {prediction.label}
+                                  </button>
+                                )
+                              })
                             }
                           </div>
                         </div>
