@@ -19,7 +19,13 @@ import {
   Settings,
   Coins,
   Volume2,
-  VolumeX
+  VolumeX,
+  Plus,
+  Trash2,
+  Heart,
+  Briefcase,
+  Flame,
+  AlertTriangle
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from './components/ui/card'
@@ -57,11 +63,19 @@ interface FortuneHistoryItem {
   summary: string
 }
 
+interface BirthdateRecord {
+  id: string
+  birthdate: string
+  name: string         // 家族や相性の相手の名前 (任意)
+  relationship: string  // 関係性 (本人, 夫, 娘, 相性相手 など)
+}
+
 interface RegularUser {
   userId: string
   username: string
   profilePictureUrl?: string
-  birthdate: string
+  birthdate: string // 主要生年月日
+  birthdates?: BirthdateRecord[] // 複数生年月日
   lastFortuneAt?: number
   history: FortuneHistoryItem[]
   totalDiamonds: number
@@ -80,13 +94,17 @@ interface TransactionItem {
 }
 
 interface FortuneResult {
-  summary: string
-  personality: string
-  fortune: string
-  advice: string
-  luckyColor: string
-  luckyItem: string
-  luckyAction: string
+  summary: string      // 総評
+  destiny: string      // 宿命・本質
+  personality: string  // 性格
+  love: string         // 恋愛
+  workMoney: string    // 仕事・お金
+  fortune3to5: string  // 3〜5年
+  warning: string      // 注意点
+  advice: string       // 指定回答またはライバーカンペ
+  luckyColor?: string
+  luckyItem?: string
+  luckyAction?: string
 }
 
 interface TtsSpeechItem {
@@ -123,6 +141,11 @@ export default function App() {
   // PayPay手動追加用
   const [paypayUser, setPaypayUser] = useState('')
   const [paypayAmount, setPaypayAmount] = useState('1000')
+
+  // 複数生年月日追加用
+  const [newBirthdate, setNewBirthdate] = useState('')
+  const [newBirthRelation, setNewBirthRelation] = useState('本人')
+  const [newBirthName, setNewBirthName] = useState('')
 
   // 左カラムのタブ切り替え ('chat' | 'history')
   const [leftTab, setLeftTab] = useState<'chat' | 'history'>('chat')
@@ -183,12 +206,20 @@ export default function App() {
     localStorage.setItem('fortune_tts_volume', String(ttsVolume))
   }, [ttsVolume])
 
+  // 音声読み上げ用絵文字クリーンアップ ＆ 12文字トリミング
+  const cleanTtsName = (name: string): string => {
+    return name
+      .replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]/g, '')
+      .replace(/\p{Emoji}/gu, '')
+      .replace(/\p{Extended_Pictographic}/gu, '')
+      .replace(/\s+/g, '') // スペース除去
+      .trim()
+  }
+
   // 音声読み上げコア処理
   const speakText = (text: string) => {
     if (!('speechSynthesis' in window)) return
-    
-    // 連投時のバグや声の重なりを防ぐため、再生中の音声を一度キャンセル
-    window.speechSynthesis.cancel()
+    window.speechSynthesis.cancel() // 重なり防止
 
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ja-JP'
@@ -198,21 +229,22 @@ export default function App() {
     window.speechSynthesis.speak(utterance)
   }
 
-  // 読み上げトリガーキューの監視
+  // 読み上げトリガーキューの監視（鑑定結果の読み上げは除外し、チャット内容のみにする）
   useEffect(() => {
     if (!ttsSpeechTrigger || !isTtsEnabled) return
 
     const { username, comment, hasBirth, isRegular, isGift, giftName } = ttsSpeechTrigger
+    const displayName = cleanTtsName(username).slice(0, 12) || 'ゲスト'
     
     let text = ''
     if (isGift) {
-      text = `${username}さんから、ギフト「${giftName}」を頂きました！`
+      text = `${displayName}さんから、ギフト「${giftName}」を頂きました！`
     } else {
       if (ttsMode === 'all') {
-        text = `${username}さん。「${comment}」`
+        text = `${displayName}さん。「${comment}」`
       } else if (ttsMode === 'fortune' && (hasBirth || isRegular)) {
         const regularText = isRegular ? '常連の' : ''
-        text = `${regularText}${username}さんから、占い依頼が入りました。「${comment}」`
+        text = `${regularText}${displayName}さんから、占い依頼が入りました。「${comment}」`
       }
     }
 
@@ -261,9 +293,17 @@ export default function App() {
       let isRegularMatch = false
       setRegulars(prevRegs => {
         const regular = prevRegs[msg.userId]
-        if (regular && regular.birthdate) {
+        if (regular) {
           isRegularMatch = true
-          // すでに鑑定待ちリストに保留中の同じユーザーがいない場合のみ追加
+
+          // 登録されたすべての生年月日を結合して鑑定待ちリストに送る
+          let combinedBirth = regular.birthdate
+          if (regular.birthdates && regular.birthdates.length > 0) {
+            combinedBirth = regular.birthdates
+              .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
+              .join(', ')
+          }
+
           setFortuneRequests(prevReqs => {
             if (prevReqs.some(r => r.userId === msg.userId && r.status === 'pending')) {
               return prevReqs
@@ -273,7 +313,7 @@ export default function App() {
               username: msg.username,
               userId: msg.userId,
               profilePictureUrl: msg.profilePictureUrl,
-              birthdate: regular.birthdate,
+              birthdate: combinedBirth,
               comment: msg.comment,
               timestamp: Date.now(),
               status: 'pending',
@@ -284,7 +324,7 @@ export default function App() {
         return prevRegs
       })
 
-      // 読み上げ用のキューに追加 (Stale Closureを回避するため最新状態をトリガーとして設定)
+      // 読み上げキューに登録
       setTtsSpeechTrigger({
         username: msg.username,
         comment: msg.comment,
@@ -312,6 +352,9 @@ export default function App() {
               username: req.username,
               profilePictureUrl: req.profilePictureUrl,
               birthdate: req.birthdate,
+              birthdates: [
+                { id: '1', birthdate: req.birthdate, name: '', relationship: '本人' }
+              ],
               history: [],
               totalDiamonds: 0,
               totalPayPay: 0
@@ -326,7 +369,6 @@ export default function App() {
 
     // ギフト受信イベント
     newSocket.on('gift-log', (gift: { id: string; username: string; userId: string; profilePictureUrl?: string; giftName: string; diamonds: number; count: number; timestamp: number }) => {
-      // 履歴に追加
       setTransactions(prev => [
         {
           id: gift.id,
@@ -349,6 +391,7 @@ export default function App() {
           username: gift.username,
           profilePictureUrl: gift.profilePictureUrl,
           birthdate: '', 
+          birthdates: [],
           history: [],
           totalDiamonds: 0,
           totalPayPay: 0
@@ -364,6 +407,13 @@ export default function App() {
         // もし生年月日が登録済み（常連）であれば自動で鑑定待ちへ
         if (user.birthdate) {
           isRegularMatch = true
+          let combinedBirth = user.birthdate
+          if (user.birthdates && user.birthdates.length > 0) {
+            combinedBirth = user.birthdates
+              .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
+              .join(', ')
+          }
+
           setFortuneRequests(prevReqs => {
             if (prevReqs.some(r => r.userId === gift.userId && r.status === 'pending')) return prevReqs
             return [...prevReqs, {
@@ -371,7 +421,7 @@ export default function App() {
               username: gift.username,
               userId: gift.userId,
               profilePictureUrl: gift.profilePictureUrl,
-              birthdate: user.birthdate,
+              birthdate: combinedBirth,
               comment: `ギフト「${gift.giftName}」を頂きました`,
               timestamp: Date.now(),
               status: 'pending',
@@ -401,7 +451,7 @@ export default function App() {
       )
     })
 
-    // 占い完了結果受信
+    // 占い完了結果受信 (自動読み上げは削除され、8項目対応)
     newSocket.on('fortune-result', (data: { id: string, username: string, birthdate: string, result?: FortuneResult, error?: string }) => {
       if (data.error) {
         setFortuneRequests(prev => 
@@ -412,13 +462,15 @@ export default function App() {
         setFortuneRequests(prev => {
           const req = prev.find(r => r.id === data.id)
           if (req) {
-            // 常連カルテの更新
             setRegulars(prevRegs => {
               const user = prevRegs[req.userId] || {
                 userId: req.userId,
                 username: req.username,
                 profilePictureUrl: req.profilePictureUrl,
                 birthdate: data.birthdate,
+                birthdates: [
+                  { id: '1', birthdate: data.birthdate, name: '', relationship: '本人' }
+                ],
                 history: [],
                 totalDiamonds: 0,
                 totalPayPay: 0
@@ -436,7 +488,10 @@ export default function App() {
                 if (user.history.length > 5) user.history.pop()
               }
 
-              user.birthdate = data.birthdate 
+              // 生年月日の更新
+              if (!user.birthdate) {
+                user.birthdate = data.birthdate
+              }
               user.lastFortuneAt = Date.now()
               user.username = req.username
               user.profilePictureUrl = req.profilePictureUrl
@@ -454,11 +509,6 @@ export default function App() {
           [data.id]: data.result!
         }))
         setSelectedRequestId(data.id)
-
-        // 鑑定完了時、占い要点を読み上げる演出（オプション）
-        if (isTtsEnabled) {
-          speakText(`${data.username}さんの鑑定が完了しました。要点、「${data.result.summary}」`)
-        }
       }
     })
 
@@ -525,7 +575,6 @@ export default function App() {
     const id = Math.random().toString()
     const timestamp = Date.now()
 
-    // 履歴に追加
     setTransactions(prev => [
       {
         id,
@@ -539,7 +588,6 @@ export default function App() {
       ...prev
     ])
 
-    // 常連登録済みか名前で検索して紐付け
     let isRegularMatch = false
     setRegulars(prevRegs => {
       let matchedUserId = ''
@@ -554,6 +602,13 @@ export default function App() {
         isRegularMatch = true
         const user = prevRegs[matchedUserId]
         user.totalPayPay += amountNum
+
+        let combinedBirth = user.birthdate
+        if (user.birthdates && user.birthdates.length > 0) {
+          combinedBirth = user.birthdates
+            .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
+            .join(', ')
+        }
         
         // 鑑定待ちへ自動追加
         setFortuneRequests(prevReqs => {
@@ -563,7 +618,7 @@ export default function App() {
             username: user.username,
             userId: matchedUserId,
             profilePictureUrl: user.profilePictureUrl,
-            birthdate: user.birthdate,
+            birthdate: combinedBirth,
             comment: `PayPay ${amountNum}円の着金を確認しました`,
             timestamp,
             status: 'pending',
@@ -582,6 +637,7 @@ export default function App() {
             userId,
             username: paypayUser.trim(),
             birthdate: '',
+            birthdates: [],
             history: [],
             totalDiamonds: 0,
             totalPayPay: amountNum
@@ -592,7 +648,6 @@ export default function App() {
       }
     })
 
-    // 読み上げキューにPayPay追加をトリガー
     setTtsSpeechTrigger({
       username: paypayUser.trim(),
       comment: `PayPay入金 ${amountNum}円`,
@@ -611,6 +666,13 @@ export default function App() {
   const handleAddRequestFromTx = (tx: TransactionItem) => {
     const regular = regulars[tx.userId]
     if (regular && regular.birthdate) {
+      let combinedBirth = regular.birthdate
+      if (regular.birthdates && regular.birthdates.length > 0) {
+        combinedBirth = regular.birthdates
+          .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
+          .join(', ')
+      }
+
       setFortuneRequests(prev => {
         if (prev.some(r => r.userId === tx.userId && r.status === 'pending')) return prev
         return [...prev, {
@@ -618,7 +680,7 @@ export default function App() {
           username: tx.username,
           userId: tx.userId,
           profilePictureUrl: tx.profilePictureUrl,
-          birthdate: regular.birthdate,
+          birthdate: combinedBirth,
           comment: `${tx.description}から鑑定開始`,
           timestamp: Date.now(),
           status: 'pending',
@@ -650,11 +712,17 @@ export default function App() {
             username: tx.username,
             profilePictureUrl: tx.profilePictureUrl,
             birthdate: birth.trim(),
+            birthdates: [
+              { id: '1', birthdate: birth.trim(), name: '', relationship: '本人' }
+            ],
             history: [],
             totalDiamonds: 0,
             totalPayPay: 0
           }
           user.birthdate = birth.trim()
+          if (!user.birthdates || user.birthdates.length === 0) {
+            user.birthdates = [{ id: '1', birthdate: birth.trim(), name: '', relationship: '本人' }]
+          }
           if (tx.type === 'gift') user.totalDiamonds += tx.amount
           if (tx.type === 'paypay') user.totalPayPay += tx.amount
 
@@ -667,13 +735,68 @@ export default function App() {
     }
   }
 
-  // 模擬チャットの送信
+  // 複数生年月日レコードの追加
+  const handleAddBirthdateRecord = (userId: string) => {
+    if (!newBirthdate.trim()) return
+
+    setRegulars(prevRegs => {
+      const user = prevRegs[userId]
+      if (!user) return prevRegs
+
+      const birthdatesList = user.birthdates || []
+      const newRecord = {
+        id: Math.random().toString(),
+        birthdate: newBirthdate.trim(),
+        name: newBirthName.trim(),
+        relationship: newBirthRelation.trim()
+      }
+
+      const nextBirthdates = [...birthdatesList, newRecord]
+      const mainBirth = nextBirthdates.find(b => b.relationship === '本人')?.birthdate || newBirthdate.trim()
+
+      const updatedUser = {
+        ...user,
+        birthdate: mainBirth,
+        birthdates: nextBirthdates
+      }
+
+      const nextRegs = { ...prevRegs, [userId]: updatedUser }
+      localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+      return nextRegs
+    })
+
+    setNewBirthdate('')
+    setNewBirthName('')
+    setSystemAlert('生年月日を追加しました。鑑定待ちリストへ反映するには次回のリクエストから適用されます。')
+  }
+
+  // 複数生年月日レコードの削除
+  const handleDeleteBirthdateRecord = (userId: string, recordId: string) => {
+    setRegulars(prevRegs => {
+      const user = prevRegs[userId]
+      if (!user || !user.birthdates) return prevRegs
+
+      const nextBirthdates = user.birthdates.filter(b => b.id !== recordId)
+      const mainBirth = nextBirthdates.find(b => b.relationship === '本人')?.birthdate || (nextBirthdates[0]?.birthdate || '')
+
+      const updatedUser = {
+        ...user,
+        birthdate: mainBirth,
+        birthdates: nextBirthdates
+      }
+
+      const nextRegs = { ...prevRegs, [userId]: updatedUser }
+      localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+      return nextRegs
+    })
+  }
+
+  // 模擬チャット・ギフトの送信
   const triggerMockChat = (type: 'valid' | 'invalid') => {
     if (!socket) return
     socket.emit('send-mock-chat', type)
   }
 
-  // 模擬ギフトの送信
   const triggerMockGift = () => {
     if (!socket) return
     socket.emit('send-mock-gift')
@@ -684,14 +807,35 @@ export default function App() {
   const activeResult = selectedRequestId ? fortuneResults[selectedRequestId] : null
   const activeRegular = activeRequest ? regulars[activeRequest.userId] : null
 
-  // 読み上げ用のテキスト作成
+  // 読み上げ用のテキスト作成 (姐御口調のズバズバ語りスクリプト)
   const getSpeechScript = (req: FortuneRequest, res: FortuneResult) => {
-    return `${req.username}さん、占わせていただきますね。
-生年月日は${req.birthdate}ですね。
-今回の鑑定のポイントは、「${res.summary}」です。
-お人柄を見てみますと、${res.personality}
-現在お悩みの運勢やアドバイスですが、${res.fortune}
-開運へのヒントとして、ラッキーカラーは「${res.luckyColor}」、ラッキーアイテムは「${res.luckyItem}」です。また、${res.luckyAction}を心がけるとさらに運気が高まりますよ。応援しています！`
+    return `${req.username}さん、あんたを占ってあげるわ。
+生年月日は【${req.birthdate}】ね。
+いい？今回の総評をズバッと言うわよ。
+「${res.summary}」
+
+まず、あんたの宿命と本質だけど、
+${res.destiny}
+
+次に、あんたの性格の怖いほど当たる特徴ね。
+${res.personality}
+
+恋愛と結婚についてはね、
+${res.love}
+
+仕事とお金に関してだけど、
+${res.workMoney}
+
+今後3〜5年の運気の流れは、
+${res.fortune3to5}
+
+そして、人生で絶対に気をつけるべき警告よ。
+${res.warning}
+
+最後にあんたの相談に対してのアドバイスよ。
+${res.advice}
+
+ラッキーカラーは「${res.luckyColor || 'なし'}」、アイテムは「${res.luckyItem || 'なし'}」、アクションは「${res.luckyAction || 'なし'}」よ。しっかり心に留めておきなさい！`
   }
 
   return (
@@ -712,13 +856,11 @@ export default function App() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {/* サーバー接続状態 */}
           <Badge variant={serverConnected ? 'sage' : 'destructive'} className="flex gap-1 items-center px-3 py-1 text-xs">
             {serverConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
             {serverConnected ? 'サーバー接続中' : 'サーバー未接続'}
           </Badge>
 
-          {/* TikTok接続 */}
           <div className="flex items-center gap-2 bg-white/80 p-1.5 rounded-lg border border-beige-200 shadow-inner">
             <Input 
               placeholder="TikTokユーザー名" 
@@ -752,7 +894,6 @@ export default function App() {
             )}
           </div>
 
-          {/* 読み上げ クイック切り替え */}
           <Button
             variant="outline"
             size="icon"
@@ -763,7 +904,6 @@ export default function App() {
             {isTtsEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </Button>
 
-          {/* テストシミュレータ */}
           <div className="flex items-center gap-1.5 bg-sage-50/50 p-1 rounded-lg border border-sage-200">
             <span className="text-[10px] text-sage-700 px-1.5 font-bold">テスト:</span>
             <Button 
@@ -786,20 +926,18 @@ export default function App() {
             </Button>
           </div>
 
-          {/* 設定ボタン */}
           <Button 
             variant="outline" 
             size="icon" 
             className="h-9 w-9 border-beige-200 hover:bg-beige-100 shrink-0" 
             onClick={() => setIsSettingsOpen(true)}
-            title="サーバー設定"
+            title="サーバー・読み上げ設定"
           >
             <Settings className="w-4 h-4 text-sage-700" />
           </Button>
         </div>
       </header>
 
-      {/* エラー表示 */}
       {errorMessage && (
         <div className="mb-4 p-4 rounded-xl bg-red-50 border border-red-200 text-red-800 text-sm flex items-center gap-3 animate-bounce">
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -807,7 +945,6 @@ export default function App() {
         </div>
       )}
 
-      {/* システムアラート */}
       {systemAlert && (
         <div className="mb-4 p-4 rounded-xl bg-gold-100 border border-gold-200 text-gold-800 text-sm flex items-center justify-between gap-3 shadow-sm">
           <div className="flex items-center gap-3">
@@ -821,7 +958,7 @@ export default function App() {
       {/* 3カラムグリッドレイアウト */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* 左カラム: コメント監視 / 入金ギフト履歴 タブ (幅3.5/12) */}
+        {/* 左カラム: コメント監視 / 入金ギフト履歴 タブ (幅3/12) */}
         <Card className="lg:col-span-3 flex flex-col h-[calc(100vh-190px)] border-beige-200 bg-white/60">
           <CardHeader className="py-3 pb-0">
             <div className="flex border-b border-beige-200">
@@ -852,7 +989,6 @@ export default function App() {
 
           <CardContent className="flex-1 p-3 overflow-hidden flex flex-col pt-3">
             
-            {/* LIVEチャットタブ */}
             {leftTab === 'chat' && (
               <ScrollArea maxHeight="100%" className="flex-1 border rounded-xl p-2.5 bg-beige-50/50">
                 {chatLogs.length === 0 ? (
@@ -898,10 +1034,8 @@ export default function App() {
               </ScrollArea>
             )}
 
-            {/* ギフト・決済タブ */}
             {leftTab === 'history' && (
               <div className="flex-1 flex flex-col overflow-hidden space-y-3">
-                {/* 手動PayPay追加フォーム */}
                 <div className="p-2.5 bg-beige-50/70 border border-beige-200 rounded-xl space-y-2">
                   <span className="text-[9px] font-bold text-beige-700 uppercase block">PayPay入金の手動登録</span>
                   <div className="flex gap-2">
@@ -927,7 +1061,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 履歴スクロール */}
                 <ScrollArea maxHeight="100%" className="flex-1 border rounded-xl p-2 bg-beige-50/30">
                   {transactions.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-6 text-center">
@@ -1033,12 +1166,12 @@ export default function App() {
                             </div>
                           </div>
                           
-                          <div className="flex flex-col items-end gap-1">
-                            <Badge variant="outline" className="bg-sage-50 text-[10px] text-sage-700 shrink-0">
+                          <div className="flex flex-col items-end gap-1 max-w-[150px]">
+                            <div className="text-[9px] text-sage-700 bg-sage-50 border border-sage-200 px-1.5 py-0.5 rounded text-right leading-tight max-h-[40px] overflow-y-auto">
                               {req.birthdate}
-                            </Badge>
+                            </div>
                             {req.isRegularMatch && (
-                              <Badge variant="sage" className="text-[7px] scale-90 px-1 py-0 shrink-0">常連自動マッチ</Badge>
+                              <Badge variant="sage" className="text-[7px] scale-90 px-1 py-0 mt-1 shrink-0">常連自動マッチ</Badge>
                             )}
                           </div>
                         </div>
@@ -1114,9 +1247,9 @@ export default function App() {
           <CardHeader className="py-4 border-b border-beige-100 flex-shrink-0">
             <div className="flex items-center gap-2 text-beige-800">
               <BookOpen className="w-5 h-5 text-gold-500" />
-              <CardTitle className="text-sm font-bold">Gemini 鑑定カンペ</CardTitle>
+              <CardTitle className="text-sm font-bold">姐御のズバズバ鑑定カンペ</CardTitle>
             </div>
-            <CardDescription>ライバー用の口頭トーク用のカンペが表示されます</CardDescription>
+            <CardDescription>辛口断言＆愛のあるトーク用カンペです</CardDescription>
           </CardHeader>
           
           <CardContent className="flex-1 p-5 overflow-y-auto bg-gradient-to-b from-white to-beige-50/20">
@@ -1134,8 +1267,8 @@ export default function App() {
                   <div className="w-14 h-14 rounded-full border-4 border-gold-100 border-t-gold-500 animate-spin"></div>
                   <Sparkles className="w-6 h-6 text-gold-500 absolute animate-pulse" />
                 </div>
-                <p className="text-sm font-bold text-beige-800 animate-pulse">Gemini 鑑定中...</p>
-                <p className="text-xs text-sage-500 mt-1">生年月日をもとに最適なアドバイスを生成しています（1〜2秒）</p>
+                <p className="text-sm font-bold text-beige-800 animate-pulse">姐御 鑑定中...</p>
+                <p className="text-xs text-sage-500 mt-1">ズバズバ切り込む占い結果を生成中（1〜2秒）</p>
               </div>
             ) : activeRequest.status === 'error' ? (
               <div className="h-full flex flex-col items-center justify-center text-red-800 p-8 text-center">
@@ -1147,7 +1280,7 @@ export default function App() {
               <div className="space-y-5 animate-fade-in text-sm">
                 
                 {/* 鑑定中ユーザー情報と常連ステータス */}
-                <div className="pb-4 border-b border-beige-100 flex flex-col gap-2">
+                <div className="pb-4 border-b border-beige-100 flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       {activeRequest.profilePictureUrl ? (
@@ -1162,86 +1295,180 @@ export default function App() {
                         <p className="text-[9px] text-sage-500">ID: @{activeRequest.userId}</p>
                       </div>
                     </div>
-                    <Badge variant="gold" className="text-[10px]">{activeRequest.birthdate}</Badge>
                   </div>
 
-                  {/* 常連カルテ情報 */}
+                  {/* 常連カルテ情報 (複数生年月日管理搭載) */}
                   {activeRegular && (
-                    <div className="bg-sage-50/70 border border-sage-200/50 rounded-lg p-2 text-[10px] text-sage-800 space-y-1">
-                      <div className="flex items-center justify-between font-semibold border-b border-sage-200 pb-1 mb-1">
-                        <span className="flex items-center gap-1">👤 常連カルテ</span>
+                    <div className="bg-sage-50/70 border border-sage-200/50 rounded-lg p-2.5 text-[10px] text-sage-800 space-y-2">
+                      <div className="flex items-center justify-between font-semibold border-b border-sage-200 pb-1.5 mb-1.5">
+                        <span className="flex items-center gap-1 text-xs">👤 常連カルテ・相性メモ</span>
                         <div className="flex gap-2">
                           <span className="flex items-center text-amber-600"><Coins className="w-3 h-3 mr-0.5" />{activeRegular.totalDiamonds}ダイヤ</span>
                           <span className="flex items-center text-blue-600">💸 PayPay: {activeRegular.totalPayPay}円</span>
                         </div>
                       </div>
                       
-                      {/* 過去の相談履歴リスト */}
-                      {activeRegular.history && activeRegular.history.length > 0 ? (
+                      {/* 生年月日リスト管理UI */}
+                      <div className="space-y-1.5">
+                        <span className="font-bold text-[9px] text-sage-600 block uppercase">登録されている生年月日一覧:</span>
                         <div className="space-y-1">
-                          <span className="font-bold text-[8px] text-sage-500 uppercase">過去の鑑定記録:</span>
+                          {(activeRegular.birthdates || [
+                            { id: '1', birthdate: activeRegular.birthdate, name: '', relationship: '本人' }
+                          ]).map((b) => (
+                            <div key={b.id} className="bg-white/80 p-1.5 rounded border border-sage-100 flex justify-between items-center text-[10px]">
+                              <div>
+                                <Badge variant="outline" className="mr-1 py-0 px-1 bg-sage-50/50 text-[8px] scale-95">{b.relationship}</Badge>
+                                {b.name && <span className="font-semibold text-beige-800 mr-1.5">{b.name}</span>}
+                                <span className="font-mono text-sage-700">{b.birthdate}</span>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-5 w-5 text-red-500 hover:text-red-700 hover:bg-red-50 shrink-0"
+                                onClick={() => handleDeleteBirthdateRecord(activeRegular.userId, b.id)}
+                                title="生年月日を削除"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* 生年月日追加ミニフォーム */}
+                        <div className="pt-1.5 border-t border-sage-200/50 flex flex-wrap gap-1.5 items-center">
+                          <Input 
+                            placeholder="本人, 夫, 相性相手等"
+                            value={newBirthRelation}
+                            onChange={(e) => setNewBirthRelation(e.target.value)}
+                            className="h-7 text-[9px] px-1.5 w-20 bg-white"
+                          />
+                          <Input 
+                            placeholder="名前(任意)"
+                            value={newBirthName}
+                            onChange={(e) => setNewBirthName(e.target.value)}
+                            className="h-7 text-[9px] px-1.5 w-16 bg-white"
+                          />
+                          <Input 
+                            placeholder="1995/10/12"
+                            value={newBirthdate}
+                            onChange={(e) => setNewBirthdate(e.target.value)}
+                            className="h-7 text-[9px] px-1.5 w-24 bg-white"
+                          />
+                          <Button 
+                            variant="outline"
+                            size="icon"
+                            className="h-7 w-7 text-xs shadow-inner"
+                            onClick={() => handleAddBirthdateRecord(activeRegular.userId)}
+                            title="生年月日を追加"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* 過去の相談履歴リスト */}
+                      {activeRegular.history && activeRegular.history.length > 0 && (
+                        <div className="space-y-1 pt-1.5 border-t border-sage-200/50">
+                          <span className="font-bold text-[9px] text-sage-600 block uppercase">過去の総評履歴:</span>
                           <div className="space-y-1 max-h-[60px] overflow-y-auto pr-1">
                             {activeRegular.history.map((hist, idx) => (
-                              <div key={idx} className="bg-white/80 p-1.5 rounded border border-sage-100 text-[9px] leading-relaxed">
-                                <div className="flex justify-between text-[8px] text-muted-foreground mb-0.5">
-                                  <span>{new Date(hist.timestamp).toLocaleDateString()}の相談</span>
-                                  <span>{hist.birthdate}</span>
+                              <div key={idx} className="bg-white/50 p-1 rounded border border-sage-100 text-[9px]">
+                                <div className="flex justify-between text-[8px] text-muted-foreground">
+                                  <span>{new Date(hist.timestamp).toLocaleDateString()}</span>
+                                  <span className="truncate max-w-[120px]">{hist.birthdate}</span>
                                 </div>
-                                <div className="text-foreground/90 font-medium">相談: 「{hist.comment}」</div>
-                                <div className="text-gold-700 italic">結果: {hist.summary}</div>
+                                <div className="text-foreground/80 truncate">相談: {hist.comment}</div>
+                                <div className="text-gold-700 italic font-medium truncate">結果: {hist.summary}</div>
                               </div>
                             ))}
                           </div>
                         </div>
-                      ) : (
-                        <p className="text-sage-500 italic text-[9px]">過去の鑑定記録はありません</p>
                       )}
                     </div>
                   )}
                 </div>
 
                 {/* 鑑定の要点 (キャッチコピー) */}
-                <div className="p-4 bg-gradient-to-r from-gold-100/50 to-beige-100/30 border border-gold-200/60 rounded-xl">
-                  <span className="text-[9px] font-bold text-gold-600 block mb-1 uppercase tracking-wider">💎 鑑定の要点 (キャッチコピー)</span>
-                  <p className="font-serif text-sm font-semibold text-beige-900 leading-snug">{activeResult.summary}</p>
+                <div className="p-4 bg-gradient-to-r from-gold-100/50 to-beige-100/30 border border-gold-200/60 rounded-xl relative overflow-hidden">
+                  <div className="absolute -right-3 -bottom-3 text-gold-200/35"><Flame className="w-16 h-16 rotate-12" /></div>
+                  <span className="text-[9px] font-bold text-gold-600 block mb-1 uppercase tracking-wider">💎 姐御からのズバッと総評</span>
+                  <p className="font-serif text-sm font-bold text-beige-900 leading-snug relative z-10">「{activeResult.summary}」</p>
                 </div>
 
-                {/* 基本性格 */}
-                <div className="space-y-1">
-                  <span className="text-[9px] font-bold text-sage-500 block uppercase tracking-wider">🌸 基本性格と本質的な魅力</span>
-                  <div className="bg-sage-50/50 p-3.5 rounded-xl border border-sage-100 text-xs leading-relaxed text-foreground/90 whitespace-pre-line">
-                    {activeResult.personality}
+                {/* 8項目出力表示領域 */}
+                <div className="space-y-3">
+                  
+                  {/* 1. 宿命・本質 */}
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-sage-600 block uppercase tracking-wider flex items-center gap-1"><Sparkles className="w-3.5 h-3.5 text-gold-500" />1. 宿命・本質</span>
+                    <div className="bg-sage-50/50 p-3 rounded-xl border border-sage-100 text-xs leading-relaxed text-foreground/90 whitespace-pre-line">
+                      {activeResult.destiny}
+                    </div>
                   </div>
-                </div>
 
-                {/* 運勢アドバイス */}
-                <div className="space-y-1">
-                  <span className="text-[9px] font-bold text-gold-600 block uppercase tracking-wider">🌟 運勢の流れ・お悩みアドバイス</span>
-                  <div className="bg-beige-50/30 p-3.5 rounded-xl border border-beige-200 text-xs leading-relaxed text-foreground/90 whitespace-pre-line">
-                    {activeResult.fortune}
+                  {/* 2. 性格の怖いほど当たる特徴 */}
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-sage-600 block uppercase tracking-wider flex items-center gap-1"><User className="w-3.5 h-3.5 text-gold-500" />2. 性格の怖いほど当たる特徴</span>
+                    <div className="bg-sage-50/50 p-3 rounded-xl border border-sage-100 text-xs leading-relaxed text-foreground/90 whitespace-pre-line">
+                      {activeResult.personality}
+                    </div>
                   </div>
+
+                  {/* 3. 恋愛・結婚 */}
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-sage-600 block uppercase tracking-wider flex items-center gap-1"><Heart className="w-3.5 h-3.5 text-rose-500" />3. 恋愛・結婚</span>
+                    <div className="bg-sage-50/50 p-3 rounded-xl border border-sage-100 text-xs leading-relaxed text-foreground/90 whitespace-pre-line">
+                      {activeResult.love}
+                    </div>
+                  </div>
+
+                  {/* 4. 仕事・お金 */}
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-sage-600 block uppercase tracking-wider flex items-center gap-1"><Briefcase className="w-3.5 h-3.5 text-amber-600" />4. 仕事・お金</span>
+                    <div className="bg-sage-50/50 p-3 rounded-xl border border-sage-100 text-xs leading-relaxed text-foreground/90 whitespace-pre-line">
+                      {activeResult.workMoney}
+                    </div>
+                  </div>
+
+                  {/* 5. 今後3〜5年の運気 */}
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-gold-600 block uppercase tracking-wider flex items-center gap-1"><Clock className="w-3.5 h-3.5 text-gold-500" />5. 今後3〜5年の運気</span>
+                    <div className="bg-beige-50/30 p-3 rounded-xl border border-beige-200 text-xs leading-relaxed text-foreground/90 whitespace-pre-line">
+                      {activeResult.fortune3to5}
+                    </div>
+                  </div>
+
+                  {/* 6. 人生で気をつけること */}
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-red-600 block uppercase tracking-wider flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5 text-red-500" />6. 人生で気をつけること</span>
+                    <div className="bg-red-50/20 p-3 rounded-xl border border-red-200/40 text-xs leading-relaxed text-foreground/90 whitespace-pre-line">
+                      {activeResult.warning}
+                    </div>
+                  </div>
+
+                  {/* 7. お悩みへの重点回答 / 伝え方アドバイス */}
+                  <div className="space-y-1">
+                    <span className="text-[9px] font-bold text-sage-700 block uppercase tracking-wider flex items-center gap-1"><Coffee className="w-3.5 h-3.5 text-sage-600" />7. 個別相談へのズバッと回答</span>
+                    <div className="p-3.5 bg-sage-100/50 border border-sage-200/50 rounded-xl text-xs leading-relaxed text-sage-900 font-medium whitespace-pre-line">
+                      {activeResult.advice}
+                    </div>
+                  </div>
+
                 </div>
 
-                {/* ライバー向け トークのアドバイス */}
-                <div className="p-4 bg-sage-100/50 border border-sage-200/50 rounded-xl relative overflow-hidden">
-                  <div className="absolute right-2 top-2 text-sage-200/80"><Coffee className="w-12 h-12 rotate-12" /></div>
-                  <span className="text-[9px] font-bold text-sage-700 block mb-1 uppercase tracking-wider">🎙️ リスナーへの伝え方・トークのコツ（カンペ）</span>
-                  <p className="text-xs leading-relaxed text-sage-900 font-medium whitespace-pre-line relative z-10">{activeResult.advice}</p>
-                </div>
-
-                {/* 開運キーワード (3アイテム) */}
+                {/* 開運キーワード */}
                 <div className="grid grid-cols-3 gap-2 pt-2 text-center text-xs">
                   <div className="p-2.5 bg-white border border-beige-100 rounded-lg shadow-sm">
                     <span className="text-[9px] font-bold text-gold-500 block mb-0.5">ラッキーカラー</span>
-                    <span className="font-semibold text-[11px] text-beige-800">{activeResult.luckyColor}</span>
+                    <span className="font-semibold text-[10px] text-beige-800">{activeResult.luckyColor || 'なし'}</span>
                   </div>
                   <div className="p-2.5 bg-white border border-beige-100 rounded-lg shadow-sm">
                     <span className="text-[9px] font-bold text-gold-500 block mb-0.5">ラッキーアイテム</span>
-                    <span className="font-semibold text-[11px] text-beige-800">{activeResult.luckyItem}</span>
+                    <span className="font-semibold text-[10px] text-beige-800">{activeResult.luckyItem || 'なし'}</span>
                   </div>
                   <div className="p-2.5 bg-white border border-beige-100 rounded-lg shadow-sm">
                     <span className="text-[9px] font-bold text-gold-500 block mb-0.5">開運アクション</span>
-                    <span className="font-semibold text-[11px] text-beige-800">{activeResult.luckyAction}</span>
+                    <span className="font-semibold text-[10px] text-beige-800">{activeResult.luckyAction || 'なし'}</span>
                   </div>
                 </div>
 
@@ -1301,7 +1528,6 @@ export default function App() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* APIサーバーURL設定 */}
               <div className="space-y-1.5 pb-3 border-b border-beige-100">
                 <label className="text-[11px] font-bold text-sage-700 block">APIサーバーのURL</label>
                 <Input 
@@ -1315,11 +1541,9 @@ export default function App() {
                 </p>
               </div>
 
-              {/* チャット読み上げ設定 */}
               <div className="space-y-3 pt-1">
                 <span className="text-[11px] font-bold text-sage-700 block">🗣️ チャット読み上げ設定 (無料)</span>
                 
-                {/* 読み上げ有効スイッチ */}
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-foreground/80">読み上げ機能を有効化</span>
                   <input 
@@ -1330,7 +1554,6 @@ export default function App() {
                   />
                 </div>
 
-                {/* 読み上げモード */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-muted-foreground block">読み上げ対象</label>
                   <div className="flex gap-2">
@@ -1357,7 +1580,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 速度調整スライダー */}
                 <div className="space-y-1">
                   <div className="flex justify-between text-[10px] font-bold text-muted-foreground">
                     <span>読み上げ速度</span>
@@ -1374,7 +1596,6 @@ export default function App() {
                   />
                 </div>
 
-                {/* 音量調整スライダー */}
                 <div className="space-y-1">
                   <div className="flex justify-between text-[10px] font-bold text-muted-foreground">
                     <span>読み上げ音量</span>
