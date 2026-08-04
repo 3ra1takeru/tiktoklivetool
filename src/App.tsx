@@ -51,6 +51,7 @@ interface FortuneRequest {
   profilePictureUrl?: string
   birthdate: string
   comment: string
+  fortuneQuestion?: string
   timestamp: number
   status: 'pending' | 'loading' | 'completed' | 'error'
   isRegularMatch?: boolean // 常連による自動引き当てフラグ
@@ -164,10 +165,11 @@ export default function App() {
 
   // 読み上げ機能（TTS）の設定状態
   const [isTtsEnabled, setIsTtsEnabled] = useState(() => {
-    return localStorage.getItem('fortune_tts_enabled') === 'true'
+    const saved = localStorage.getItem('fortune_tts_enabled')
+    return saved !== null ? saved === 'true' : true
   })
   const [ttsMode, setTtsMode] = useState<'all' | 'fortune'>(() => {
-    return (localStorage.getItem('fortune_tts_mode') as 'all' | 'fortune') || 'fortune'
+    return (localStorage.getItem('fortune_tts_mode') as 'all' | 'fortune') || 'all'
   })
   const [ttsRate, setTtsRate] = useState(() => {
     return parseFloat(localStorage.getItem('fortune_tts_rate') || '1.0')
@@ -316,6 +318,7 @@ export default function App() {
                 profilePictureUrl: msg.profilePictureUrl,
                 birthdate: combinedBirth,
                 comment: msg.comment,
+                fortuneQuestion: msg.comment,
                 timestamp: Date.now(),
                 status: 'pending',
                 isRegularMatch: true
@@ -444,6 +447,7 @@ export default function App() {
               profilePictureUrl: gift.profilePictureUrl,
               birthdate: combinedBirth,
               comment: `ギフト「${gift.giftName}」を頂きました`,
+              fortuneQuestion: `ギフト「${gift.giftName}」を頂きました`,
               timestamp: Date.now(),
               status: 'pending',
               isRegularMatch: true
@@ -557,14 +561,29 @@ export default function App() {
     socket.emit('leave-tiktok')
   }
 
+  // 占い質問（お悩み内容）の更新
+  const handleUpdateQuestion = (id: string, value: string) => {
+    setFortuneRequests(prev => 
+      prev.map(item => item.id === id ? { ...item, fortuneQuestion: value } : item)
+    )
+  }
+
   // 鑑定開始処理（ライバーの手動承認）
   const handleStartFortune = (req: FortuneRequest) => {
     if (!socket) return
+
+    // 対象リスナーの直近5件のチャット文脈（履歴）を取得
+    const chatHistory = chatLogs
+      .filter(log => log.userId === req.userId)
+      .map(log => log.comment)
+      .slice(-5)
+
     socket.emit('start-fortune', {
       id: req.id,
       username: req.username,
       birthdate: req.birthdate,
-      comment: req.comment
+      comment: req.fortuneQuestion || req.comment || '全体運について',
+      chatHistory
     })
   }
 
@@ -641,6 +660,7 @@ export default function App() {
             profilePictureUrl: user.profilePictureUrl,
             birthdate: combinedBirth,
             comment: `PayPay ${amountNum}円の着金を確認しました`,
+            fortuneQuestion: `PayPay ${amountNum}円の着金を確認しました`,
             timestamp,
             status: 'pending',
             isRegularMatch: true
@@ -703,6 +723,7 @@ export default function App() {
           profilePictureUrl: tx.profilePictureUrl,
           birthdate: combinedBirth,
           comment: `${tx.description}から鑑定開始`,
+          fortuneQuestion: `${tx.description}から鑑定開始`,
           timestamp: Date.now(),
           status: 'pending',
           isRegularMatch: true
@@ -722,6 +743,7 @@ export default function App() {
             profilePictureUrl: tx.profilePictureUrl,
             birthdate: birth.trim(),
             comment: `${tx.description}から手動追加`,
+            fortuneQuestion: `${tx.description}から手動追加`,
             timestamp: Date.now(),
             status: 'pending'
           }
@@ -1197,9 +1219,51 @@ ${res.advice}
                           </div>
                         </div>
 
-                        <div className="my-2.5 p-2 bg-beige-50 rounded-lg text-[11px] text-muted-foreground break-words border border-beige-100/50">
-                          <span className="font-bold text-[9px] text-beige-700 block uppercase mb-0.5">コメント</span>
+                        <div className="my-2 p-2 bg-beige-50 rounded-lg text-[10px] text-muted-foreground break-words border border-beige-100/50">
+                          <span className="font-bold text-[8px] text-beige-700 block uppercase mb-0.5">直近コメント</span>
                           「{req.comment}」
+                        </div>
+
+                        {/* 占う内容の手動編集エリア */}
+                        <div className="mt-2.5 space-y-1" onClick={(e) => e.stopPropagation()}>
+                          <span className="font-bold text-[9px] text-beige-700 block uppercase">占う内容（手動で修正できます）</span>
+                          <Input
+                            value={req.fortuneQuestion || ''}
+                            onChange={(e) => handleUpdateQuestion(req.id, e.target.value)}
+                            placeholder="お悩み内容を入力（例: 転職について）"
+                            className="h-8 text-xs bg-white border-beige-200 focus-visible:ring-gold-400"
+                          />
+                          
+                          {/* クイック選択候補 */}
+                          <div className="flex flex-wrap gap-1 mt-1 max-h-[50px] overflow-y-auto pr-1">
+                            {/* 汎用お悩み候補 */}
+                            {['🔮全体運', '💼仕事・転職', '❤️恋愛・相性', '💸金運', '👥人間関係'].map(opt => (
+                              <button
+                                key={opt}
+                                onClick={() => handleUpdateQuestion(req.id, opt)}
+                                className="px-1.5 py-0.5 rounded text-[8px] font-bold border border-gold-200 bg-gold-50/50 text-gold-800 hover:bg-gold-100 transition-colors"
+                              >
+                                {opt}
+                              </button>
+                            ))}
+                            {/* ユーザーの過去チャットから候補を自動抽出して並べる */}
+                            {chatLogs
+                              .filter(log => log.userId === req.userId)
+                              .map(log => log.comment)
+                              .reverse()
+                              .slice(0, 3)
+                              .map((comm, idx) => (
+                                <button
+                                  key={idx}
+                                  onClick={() => handleUpdateQuestion(req.id, comm)}
+                                  className="px-1.5 py-0.5 rounded text-[8px] border border-beige-200 bg-white text-muted-foreground hover:bg-beige-50 transition-colors truncate max-w-[120px]"
+                                  title={comm}
+                                >
+                                  💬 {comm}
+                                </button>
+                              ))
+                            }
+                          </div>
                         </div>
 
                         <div className="flex items-center justify-between mt-3 gap-2">

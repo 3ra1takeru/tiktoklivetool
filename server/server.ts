@@ -274,7 +274,7 @@ io.on('connection', (socket) => {
   });
 
   // 占い開始要求
-  socket.on('start-fortune', async (data: { id: string; username: string; birthdate: string; comment: string }) => {
+  socket.on('start-fortune', async (data: { id: string; username: string; birthdate: string; comment: string; chatHistory?: string[] }) => {
     console.log(`Starting fortune telling for: ${data.username}, Birthdate: ${data.birthdate}`);
     socket.emit('fortune-progress', { id: data.id, status: 'loading' });
 
@@ -282,7 +282,7 @@ io.on('connection', (socket) => {
       if (!genAI) {
         throw new Error('Gemini APIキーが設定されていません。server/.env ファイルに GEMINI_API_KEY を設定してください。');
       }
-      const result = await runFortuneTelling(data.birthdate, data.comment);
+      const result = await runFortuneTelling(data.birthdate, data.comment, data.chatHistory || []);
       socket.emit('fortune-result', {
         id: data.id,
         username: data.username,
