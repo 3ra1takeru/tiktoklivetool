@@ -291,38 +291,40 @@ export default function App() {
 
       // 常連の自動引き当て処理
       let isRegularMatch = false
-      setRegulars(prevRegs => {
-        const regular = prevRegs[msg.userId]
-        if (regular) {
-          isRegularMatch = true
+      if (!msg.hasBirthdate) {
+        setRegulars(prevRegs => {
+          const regular = prevRegs[msg.userId]
+          if (regular && regular.birthdate) {
+            isRegularMatch = true
 
-          // 登録されたすべての生年月日を結合して鑑定待ちリストに送る
-          let combinedBirth = regular.birthdate
-          if (regular.birthdates && regular.birthdates.length > 0) {
-            combinedBirth = regular.birthdates
-              .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
-              .join(', ')
-          }
-
-          setFortuneRequests(prevReqs => {
-            if (prevReqs.some(r => r.userId === msg.userId && r.status === 'pending')) {
-              return prevReqs
+            // 登録されたすべての生年月日を結合して鑑定待ちリストに送る
+            let combinedBirth = regular.birthdate
+            if (regular.birthdates && regular.birthdates.length > 0) {
+              combinedBirth = regular.birthdates
+                .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
+                .join(', ')
             }
-            return [...prevReqs, {
-              id: msg.id || Math.random().toString(),
-              username: msg.username,
-              userId: msg.userId,
-              profilePictureUrl: msg.profilePictureUrl,
-              birthdate: combinedBirth,
-              comment: msg.comment,
-              timestamp: Date.now(),
-              status: 'pending',
-              isRegularMatch: true
-            }]
-          })
-        }
-        return prevRegs
-      })
+
+            setFortuneRequests(prevReqs => {
+              if (prevReqs.some(r => r.userId === msg.userId && r.status === 'pending')) {
+                return prevReqs
+              }
+              return [...prevReqs, {
+                id: msg.id || Math.random().toString(),
+                username: msg.username,
+                userId: msg.userId,
+                profilePictureUrl: msg.profilePictureUrl,
+                birthdate: combinedBirth,
+                comment: msg.comment,
+                timestamp: Date.now(),
+                status: 'pending',
+                isRegularMatch: true
+              }]
+            })
+          }
+          return prevRegs
+        })
+      }
 
       // 読み上げキューに登録
       setTtsSpeechTrigger({
@@ -344,7 +346,8 @@ export default function App() {
 
       // 初回検知時または未登録ユーザーの場合に常連データを一時保存（生年月日紐付けのため）
       setRegulars(prevRegs => {
-        if (!prevRegs[req.userId]) {
+        const user = prevRegs[req.userId]
+        if (!user) {
           const next = {
             ...prevRegs,
             [req.userId]: {
@@ -362,6 +365,24 @@ export default function App() {
           }
           localStorage.setItem('star_campe_regulars', JSON.stringify(next))
           return next
+        } else {
+          // すでに常連に登録されている場合、検出された生年月日がリストに無ければ自動追加
+          const birthdatesList = user.birthdates || [
+            { id: '1', birthdate: user.birthdate, name: '', relationship: '本人' }
+          ]
+          const isAlreadyRegistered = birthdatesList.some(b => b.birthdate === req.birthdate)
+          if (!isAlreadyRegistered) {
+            const newRecord = {
+              id: Math.random().toString(),
+              birthdate: req.birthdate,
+              name: '',
+              relationship: birthdatesList.length === 0 ? '本人' : `追加分${birthdatesList.length}`
+            }
+            user.birthdates = [...birthdatesList, newRecord]
+            const nextRegs = { ...prevRegs, [req.userId]: user }
+            localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+            return nextRegs
+          }
         }
         return prevRegs
       })
@@ -1337,19 +1358,19 @@ ${res.advice}
                         {/* 生年月日追加ミニフォーム */}
                         <div className="pt-1.5 border-t border-sage-200/50 flex flex-wrap gap-1.5 items-center">
                           <Input 
-                            placeholder="本人, 夫, 相性相手等"
+                            placeholder="関係性 (例: 夫, 娘)"
                             value={newBirthRelation}
                             onChange={(e) => setNewBirthRelation(e.target.value)}
                             className="h-7 text-[9px] px-1.5 w-20 bg-white"
                           />
                           <Input 
-                            placeholder="名前(任意)"
+                            placeholder="名前 (任意)"
                             value={newBirthName}
                             onChange={(e) => setNewBirthName(e.target.value)}
                             className="h-7 text-[9px] px-1.5 w-16 bg-white"
                           />
                           <Input 
-                            placeholder="1995/10/12"
+                            placeholder="例: 1983/11/30"
                             value={newBirthdate}
                             onChange={(e) => setNewBirthdate(e.target.value)}
                             className="h-7 text-[9px] px-1.5 w-24 bg-white"
