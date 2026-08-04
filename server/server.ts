@@ -70,9 +70,9 @@ async function runFortuneTelling(birthdate: string, question: string) {
     throw new Error('Gemini API key is not configured. Please set GEMINI_API_KEY in server/.env file.');
   }
 
-  // モデルの取得 (安定モデルである gemini-1.5-flash を使用)
+  // モデルの取得 (最新の安定モデルである gemini-3.5-flash を使用)
   const model = genAI.getGenerativeModel({ 
-    model: 'gemini-1.5-flash',
+    model: 'gemini-3.5-flash',
     generationConfig: {
       responseMimeType: 'application/json'
     }
