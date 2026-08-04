@@ -17,7 +17,9 @@ import {
   AlertCircle,
   Coffee,
   Settings,
-  Coins
+  Coins,
+  Volume2,
+  VolumeX
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from './components/ui/card'
@@ -87,6 +89,16 @@ interface FortuneResult {
   luckyAction: string
 }
 
+interface TtsSpeechItem {
+  username: string
+  comment: string
+  hasBirth: boolean
+  isRegular: boolean
+  isGift: boolean
+  giftName?: string
+  timestamp: number
+}
+
 export default function App() {
   const [socket, setSocket] = useState<Socket | null>(null)
   
@@ -127,6 +139,23 @@ export default function App() {
   const [tempApiUrl, setTempApiUrl] = useState(apiUrl)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
+  // 読み上げ機能（TTS）の設定状態
+  const [isTtsEnabled, setIsTtsEnabled] = useState(() => {
+    return localStorage.getItem('fortune_tts_enabled') === 'true'
+  })
+  const [ttsMode, setTtsMode] = useState<'all' | 'fortune'>(() => {
+    return (localStorage.getItem('fortune_tts_mode') as 'all' | 'fortune') || 'fortune'
+  })
+  const [ttsRate, setTtsRate] = useState(() => {
+    return parseFloat(localStorage.getItem('fortune_tts_rate') || '1.0')
+  })
+  const [ttsVolume, setTtsVolume] = useState(() => {
+    return parseFloat(localStorage.getItem('fortune_tts_volume') || '1.0')
+  })
+
+  // 読み上げ用の音声トリガーキュー
+  const [ttsSpeechTrigger, setTtsSpeechTrigger] = useState<TtsSpeechItem | null>(null)
+
   // スクロール自動追従用の参照
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -137,7 +166,60 @@ export default function App() {
     setIsSettingsOpen(false)
   }
 
+  // 読み上げ設定の保存
+  useEffect(() => {
+    localStorage.setItem('fortune_tts_enabled', String(isTtsEnabled))
+  }, [isTtsEnabled])
 
+  useEffect(() => {
+    localStorage.setItem('fortune_tts_mode', ttsMode)
+  }, [ttsMode])
+
+  useEffect(() => {
+    localStorage.setItem('fortune_tts_rate', String(ttsRate))
+  }, [ttsRate])
+
+  useEffect(() => {
+    localStorage.setItem('fortune_tts_volume', String(ttsVolume))
+  }, [ttsVolume])
+
+  // 音声読み上げコア処理
+  const speakText = (text: string) => {
+    if (!('speechSynthesis' in window)) return
+    
+    // 連投時のバグや声の重なりを防ぐため、再生中の音声を一度キャンセル
+    window.speechSynthesis.cancel()
+
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = 'ja-JP'
+    utterance.rate = ttsRate
+    utterance.volume = ttsVolume
+
+    window.speechSynthesis.speak(utterance)
+  }
+
+  // 読み上げトリガーキューの監視
+  useEffect(() => {
+    if (!ttsSpeechTrigger || !isTtsEnabled) return
+
+    const { username, comment, hasBirth, isRegular, isGift, giftName } = ttsSpeechTrigger
+    
+    let text = ''
+    if (isGift) {
+      text = `${username}さんから、ギフト「${giftName}」を頂きました！`
+    } else {
+      if (ttsMode === 'all') {
+        text = `${username}さん。「${comment}」`
+      } else if (ttsMode === 'fortune' && (hasBirth || isRegular)) {
+        const regularText = isRegular ? '常連の' : ''
+        text = `${regularText}${username}さんから、占い依頼が入りました。「${comment}」`
+      }
+    }
+
+    if (text) {
+      speakText(text)
+    }
+  }, [ttsSpeechTrigger])
 
   useEffect(() => {
     // Socket.ioサーバーに接続
@@ -176,9 +258,11 @@ export default function App() {
       })
 
       // 常連の自動引き当て処理
+      let isRegularMatch = false
       setRegulars(prevRegs => {
         const regular = prevRegs[msg.userId]
-        if (regular) {
+        if (regular && regular.birthdate) {
+          isRegularMatch = true
           // すでに鑑定待ちリストに保留中の同じユーザーがいない場合のみ追加
           setFortuneRequests(prevReqs => {
             if (prevReqs.some(r => r.userId === msg.userId && r.status === 'pending')) {
@@ -198,6 +282,16 @@ export default function App() {
           })
         }
         return prevRegs
+      })
+
+      // 読み上げ用のキューに追加 (Stale Closureを回避するため最新状態をトリガーとして設定)
+      setTtsSpeechTrigger({
+        username: msg.username,
+        comment: msg.comment,
+        hasBirth: !!msg.hasBirthdate,
+        isRegular: isRegularMatch,
+        isGift: false,
+        timestamp: Date.now()
       })
     })
 
@@ -248,26 +342,28 @@ export default function App() {
       ])
 
       // 常連のギフト累積を更新 ＆ 自動引き当て
+      let isRegularMatch = false
       setRegulars(prevRegs => {
         const user = prevRegs[gift.userId] || {
           userId: gift.userId,
           username: gift.username,
           profilePictureUrl: gift.profilePictureUrl,
-          birthdate: '', // 生年月日は未登録
+          birthdate: '', 
           history: [],
           totalDiamonds: 0,
           totalPayPay: 0
         }
 
         user.totalDiamonds += gift.diamonds
-        user.username = gift.username // 名前更新
-        user.profilePictureUrl = gift.profilePictureUrl // 画像更新
+        user.username = gift.username 
+        user.profilePictureUrl = gift.profilePictureUrl 
 
         const nextRegs = { ...prevRegs, [gift.userId]: user }
         localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
 
         // もし生年月日が登録済み（常連）であれば自動で鑑定待ちへ
         if (user.birthdate) {
+          isRegularMatch = true
           setFortuneRequests(prevReqs => {
             if (prevReqs.some(r => r.userId === gift.userId && r.status === 'pending')) return prevReqs
             return [...prevReqs, {
@@ -284,6 +380,17 @@ export default function App() {
           })
         }
         return nextRegs
+      })
+
+      // 読み上げ用のキューにギフトを追加
+      setTtsSpeechTrigger({
+        username: gift.username,
+        comment: `ギフト「${gift.giftName}」送信`,
+        hasBirth: false,
+        isRegular: isRegularMatch,
+        isGift: true,
+        giftName: gift.giftName,
+        timestamp: Date.now()
       })
     })
 
@@ -326,10 +433,10 @@ export default function App() {
                   comment: req.comment,
                   summary: data.result!.summary
                 })
-                if (user.history.length > 5) user.history.pop() // 直近5件
+                if (user.history.length > 5) user.history.pop()
               }
 
-              user.birthdate = data.birthdate // 生年月日を確定
+              user.birthdate = data.birthdate 
               user.lastFortuneAt = Date.now()
               user.username = req.username
               user.profilePictureUrl = req.profilePictureUrl
@@ -347,13 +454,18 @@ export default function App() {
           [data.id]: data.result!
         }))
         setSelectedRequestId(data.id)
+
+        // 鑑定完了時、占い要点を読み上げる演出（オプション）
+        if (isTtsEnabled) {
+          speakText(`${data.username}さんの鑑定が完了しました。要点、「${data.result.summary}」`)
+        }
       }
     })
 
     return () => {
       newSocket.disconnect()
     }
-  }, [apiUrl])
+  }, [apiUrl, isTtsEnabled, ttsRate, ttsVolume, ttsMode])
 
   // チャットログが更新されたら一番下にスクロール
   useEffect(() => {
@@ -428,6 +540,7 @@ export default function App() {
     ])
 
     // 常連登録済みか名前で検索して紐付け
+    let isRegularMatch = false
     setRegulars(prevRegs => {
       let matchedUserId = ''
       for (const uid in prevRegs) {
@@ -438,6 +551,7 @@ export default function App() {
       }
 
       if (matchedUserId) {
+        isRegularMatch = true
         const user = prevRegs[matchedUserId]
         user.totalPayPay += amountNum
         
@@ -476,6 +590,17 @@ export default function App() {
         localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
         return nextRegs
       }
+    })
+
+    // 読み上げキューにPayPay追加をトリガー
+    setTtsSpeechTrigger({
+      username: paypayUser.trim(),
+      comment: `PayPay入金 ${amountNum}円`,
+      hasBirth: false,
+      isRegular: isRegularMatch,
+      isGift: true,
+      giftName: `PayPay ${amountNum}円`,
+      timestamp: Date.now()
     })
 
     setPaypayUser('')
@@ -626,6 +751,17 @@ export default function App() {
               </Button>
             )}
           </div>
+
+          {/* 読み上げ クイック切り替え */}
+          <Button
+            variant="outline"
+            size="icon"
+            className={`h-9 w-9 border-beige-200 ${isTtsEnabled ? 'bg-sage-100 text-sage-800' : 'hover:bg-beige-100 text-muted-foreground'}`}
+            onClick={() => setIsTtsEnabled(!isTtsEnabled)}
+            title={isTtsEnabled ? "読み上げを無効にする" : "読み上げを有効にする"}
+          >
+            {isTtsEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </Button>
 
           {/* テストシミュレータ */}
           <div className="flex items-center gap-1.5 bg-sage-50/50 p-1 rounded-lg border border-sage-200">
@@ -1158,14 +1294,15 @@ export default function App() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
                 <Settings className="w-4 h-4 text-gold-500 animate-spin-slow" />
-                サーバー設定
+                ダッシュボード設定
               </CardTitle>
               <CardDescription>
-                無料サーバー（Render.comなど）にデプロイしたバックエンドサーバーのURLを入力します。
+                API接続先や読み上げに関する設定を行います。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-1.5">
+              {/* APIサーバーURL設定 */}
+              <div className="space-y-1.5 pb-3 border-b border-beige-100">
                 <label className="text-[11px] font-bold text-sage-700 block">APIサーバーのURL</label>
                 <Input 
                   value={tempApiUrl} 
@@ -1173,12 +1310,89 @@ export default function App() {
                   placeholder="https://your-app.onrender.com"
                   className="text-xs"
                 />
-                <p className="text-[10px] text-muted-foreground">
-                  ※ ローカル環境で実行する場合は、デフォルトの `http://localhost:5001` のままにしてください。変更を保存すると自動的に再接続されます。
+                <p className="text-[9px] text-muted-foreground">
+                  ※ ローカル実行時は `http://localhost:5001` のままにしてください。
                 </p>
               </div>
+
+              {/* チャット読み上げ設定 */}
+              <div className="space-y-3 pt-1">
+                <span className="text-[11px] font-bold text-sage-700 block">🗣️ チャット読み上げ設定 (無料)</span>
+                
+                {/* 読み上げ有効スイッチ */}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-foreground/80">読み上げ機能を有効化</span>
+                  <input 
+                    type="checkbox" 
+                    checked={isTtsEnabled} 
+                    onChange={(e) => setIsTtsEnabled(e.target.checked)}
+                    className="accent-gold-500 w-4 h-4 cursor-pointer"
+                  />
+                </div>
+
+                {/* 読み上げモード */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-muted-foreground block">読み上げ対象</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setTtsMode('fortune')}
+                      className={`flex-1 py-1.5 text-2xs font-semibold rounded-lg border transition-all ${
+                        ttsMode === 'fortune'
+                          ? 'border-gold-500 bg-gold-50 text-gold-800'
+                          : 'border-beige-200 hover:bg-beige-50 text-muted-foreground'
+                      }`}
+                    >
+                      占い依頼・常連のみ
+                    </button>
+                    <button
+                      onClick={() => setTtsMode('all')}
+                      className={`flex-1 py-1.5 text-2xs font-semibold rounded-lg border transition-all ${
+                        ttsMode === 'all'
+                          ? 'border-gold-500 bg-gold-50 text-gold-800'
+                          : 'border-beige-200 hover:bg-beige-50 text-muted-foreground'
+                      }`}
+                    >
+                      すべてのチャット
+                    </button>
+                  </div>
+                </div>
+
+                {/* 速度調整スライダー */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] font-bold text-muted-foreground">
+                    <span>読み上げ速度</span>
+                    <span>{ttsRate.toFixed(1)}x</span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min="0.5" 
+                    max="2.0" 
+                    step="0.1"
+                    value={ttsRate}
+                    onChange={(e) => setTtsRate(parseFloat(e.target.value))}
+                    className="w-full accent-gold-500 cursor-pointer h-1.5 bg-beige-100 rounded-lgappearance-none"
+                  />
+                </div>
+
+                {/* 音量調整スライダー */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] font-bold text-muted-foreground">
+                    <span>読み上げ音量</span>
+                    <span>{Math.round(ttsVolume * 100)}%</span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min="0.0" 
+                    max="1.0" 
+                    step="0.1"
+                    value={ttsVolume}
+                    onChange={(e) => setTtsVolume(parseFloat(e.target.value))}
+                    className="w-full accent-gold-500 cursor-pointer h-1.5 bg-beige-100 rounded-lgappearance-none"
+                  />
+                </div>
+              </div>
             </CardContent>
-            <CardFooter className="flex justify-end gap-2 pt-3">
+            <CardFooter className="flex justify-end gap-2 pt-3 border-t border-beige-100">
               <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => {
                 setTempApiUrl(apiUrl)
                 setIsSettingsOpen(false)
