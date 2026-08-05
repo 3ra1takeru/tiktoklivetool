@@ -64,19 +64,16 @@ function extractBirthDate(text: string): string | null {
   return null;
 }
 
-// 占い師向けのGeminiプロンプト生成
-async function runFortuneTelling(birthdate: string, question: string) {
+// 占い師向けのGeminiプロンプト生成（一時的な503エラー対策のリトライとフォールバック機能付き）
+async function runFortuneTelling(birthdate: string, question: string, chatHistory: string[] = []) {
   if (!genAI) {
     throw new Error('Gemini API key is not configured. Please set GEMINI_API_KEY in server/.env file.');
   }
 
-  // モデルの取得 (最新の安定モデルである gemini-3.5-flash を使用)
-  const model = genAI.getGenerativeModel({ 
-    model: 'gemini-3.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json'
-    }
-  });
+  // チャットの文脈履歴をフォーマット
+  const historyText = chatHistory && chatHistory.length > 0 
+    ? chatHistory.map((c, i) => `[発言 ${i + 1}]: ${c}`).join('\n')
+    : '直近の履歴なし';
 
   const prompt = `
 ズバズバ断言型の占術家です。口調は厳しめ、でも本質的には愛情があり、相手の人生を立て直すような視点で話してください。
@@ -112,44 +109,115 @@ async function runFortuneTelling(birthdate: string, question: string) {
 ・でも読んでいて妙に納得感があること
 ・相手の強みと弱点を容赦なく言語化する
 ・運気が落ちる行動もハッキリ指摘する
+・各生年月日レコードの性別（男性／女性／未指定）をもとに、四柱推命や大運（運勢の順逆バイオリズム）を的確に判断して鑑定結果に反映させること。男性と女性で大運周期の流れが変わるため、指定された性別にあわせた判定を行うこと。
 ・最後に「どう生きるべきか」を断言する
 
 【リスナー情報】
-生年月日: ${birthdate}
-相談内容・コメント: ${question || '全体運・今日の運勢について'}
+生年月日・性別・関係性: ${birthdate}
+確定した相談内容・質問: ${question || '全体運・今後の運勢について'}
+
+【相談者のチャット全体の流れ（複数コメントの履歴）】
+${historyText}
+
+【重要指示】
+・上記「相談者のチャット全体の流れ」を踏まえ、相談者が複数コメントに分けて送信した内容（お悩み、追加の生年月日、家族・相手との関係性やそれぞれの性別など）を的確に解釈して占いに反映させてください。
+・もし文脈から別の人物（夫, 子供, 恋人など）との相性や家族関係について言及されている場合は、その関係性や性別を的確に判断して占いの対象に含めてください。
 
 【出力フォーマット】
-必ず以下のキーを持つJSONオブジェクトのみを出力してください。他のテキストは含めないでください。
+必ず以下のキーを持つJSONオブジェクトのみを出力してください。他の余計な説明文やマークダウンタグ（\`\`\`json等）は一切含めず、純粋なJSON文字列として出力してください。
 
 JSON構造：
 {
-  "summary": "鑑定の要点（一言で表すキャッチコピー。例: 『一歩踏み出すことで道が開ける、飛躍の時期』）",
-  "personality": "基本性格や特徴（強みや魅力。2〜3つの箇条書き。優しく肯定的な表現で）",
-  "fortune": "運勢のアドバイス（現在の流れやお悩みに対する答え。要点を絞って短く）",
-  "advice": "リスナーへの伝え方アドバイス（ライバーが自分の口で語るためのスクリプトやコツ。例: 『〇〇さんは〜なタイプなので、まずそこを褒めてから、今年の秋頃に良い変化があると伝えてあげてください』）",
-  "luckyColor": "ラッキーカラー（例: セージグリーン、アプリコットなど、ナチュラルな色彩）",
+  "summary": "最後にズバッと総評する（姐御口調で、今後の指針やどう生きるべきかを断言する一言キャッチコピー）",
+  "destiny": "宿命・本質（どのような宿命を持って生まれたのかを、性別や星回りからハッキリと断言）",
+  "personality": "性格の怖いほど当たる特徴（強みと弱点を容赦なく、愛のある毒舌交じりで言語化）",
+  "love": "恋愛・結婚（恋愛傾向や相性、こういう人生になりやすいという大胆な決めつけ）",
+  "workMoney": "仕事・お金（向いている仕事や生き方、お金の流れ）",
+  "fortune3to5": "今後3〜5年の運気（運命周期をベースにした今後の浮き沈み）",
+  "warning": "人生で気をつけること（運気が落ちる行動の指摘、警告）",
+  "advice": "指定の占ってほしい内容（相談内容・質問）に対する重点的な回答（またはアドバイス）",
+  "luckyColor": "ラッキーカラー",
   "luckyItem": "ラッキーアイテム",
-  "luckyAction": "開運アクション（日常生活で簡単にできること）"
+  "luckyAction": "開運アクション"
 }
 `;
 
-  const result = await model.generateContent(prompt);
-  const responseText = result.response.text();
-  
+  // 一時的なエラー時にリトライおよび代替モデルへのフォールバックを行う
+  const modelsToTry = ['gemini-3.5-flash', 'gemini-1.5-flash'];
+  let lastError: any = null;
+  let responseText = '';
+
+  for (const modelName of modelsToTry) {
+    try {
+      console.log(`[Gemini API] Trying model: ${modelName}`);
+      const model = genAI.getGenerativeModel({ 
+        model: modelName,
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      });
+
+      const retries = 3;
+      let delay = 1000;
+
+      for (let attempt = 0; attempt < retries; attempt++) {
+        try {
+          const result = await model.generateContent(prompt);
+          responseText = result.response.text();
+          break; // 成功したらループを抜ける
+        } catch (error: any) {
+          lastError = error;
+          const errorMsg = error.message || '';
+          
+          // 503 Service Unavailable や 429 Rate Limit やその他の一時的エラーの場合にリトライ
+          const isTemporary = error.status === 503 || error.status === 429 ||
+                              errorMsg.includes('503') || errorMsg.includes('429') ||
+                              errorMsg.includes('Service Unavailable') || errorMsg.includes('Resource has been exhausted') ||
+                              errorMsg.includes('overloaded') || errorMsg.includes('temporary');
+          
+          if (isTemporary && attempt < retries - 1) {
+            console.warn(`[Gemini API] Temporary error on model ${modelName} (Attempt ${attempt + 1}/${retries}): ${errorMsg}. Retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2; // 指数バックオフ
+          } else {
+            throw error; // リトライ上限に達した、あるいは致命的エラー
+          }
+        }
+      }
+      
+      // ここに到達したということは、このモデルで成功したということ
+      if (responseText) {
+        console.log(`[Gemini API] Successfully generated content using model: ${modelName}`);
+        break; 
+      }
+    } catch (modelError: any) {
+      console.warn(`[Gemini API] Model ${modelName} failed: ${modelError.message || modelError}`);
+      // 次のモデルを試すためにループを継続
+    }
+  }
+
+  if (!responseText) {
+    throw lastError || new Error('鑑定の生成中にエラーが発生しました。Gemini APIが一時的に利用できないか、制限に達しています。');
+  }
+
   // JSONをパースして返す
   try {
-    return JSON.parse(responseText.trim());
+    const cleanText = responseText.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+    return JSON.parse(cleanText);
   } catch (error) {
     console.error('Failed to parse Gemini response as JSON. Raw response:', responseText);
-    // パースに失敗した場合はプレーンテキストからなんとか組み立てるフォールバック
     return {
-      summary: "運命の分岐点に立つ、優しい癒やしの時間",
-      personality: "周囲を和ませる温かい心の持ち主。直感力に優れ、人を思いやる力があります。",
-      fortune: "現在は新しいサイクルの準備期間です。焦らず自分を整えることで、秋以降に素晴らしいチャンスが訪れます。",
-      advice: "「焦らなくて大丈夫だよ」と優しく声をかけてあげてください。ラッキーカラーのグリーンを身につけるよう勧めると効果的です。",
-      luckyColor: "フォレストグリーン",
-      luckyItem: "ハーブティー",
-      luckyAction: "深呼吸をして木々の香りをかぐ"
+      summary: "いい？あんたの人生、ここからが本当の勝負なのよ！",
+      destiny: "生まれつき強い直感力と人を惹きつける華を持っているけれど、自分に甘くなりやすい宿命ね。",
+      personality: "優しくて気配り上手だけど、実はかなりの頑固者。人の意見を聞くフリをして聞き流す癖、見抜かれてるわよ。",
+      love: "尽くしすぎて都合のいい関係になりやすいから、自分を安売りするんじゃないわよ。",
+      workMoney: "感受性を活かした芸術・企画系が向いているわ。無駄遣いが多いから、お財布の紐はしっかり締めなさい！",
+      fortune3to5: "今年は停滞期だけど、来年からは一気の飛躍期に入るわ。今は焦らず牙を研ぐことね。",
+      warning: "愚痴ばかり言って行動しないこと。運気が一気に逃げていくわよ。",
+      advice: "相談に対して：今は迷う時期だけど、自分の直感を信じて進みなさい。あんたなら絶対できるから！",
+      luckyColor: "ゴールド",
+      luckyItem: "クリスタルグラス",
+      luckyAction: "朝一番に鏡に向かって笑顔を作る"
     };
   }
 }

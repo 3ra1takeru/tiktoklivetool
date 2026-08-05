@@ -50,6 +50,7 @@ interface FortuneRequest {
   userId: string
   profilePictureUrl?: string
   birthdate: string
+  gender?: 'male' | 'female' | 'unspecified'
   comment: string
   fortuneQuestion?: string
   timestamp: number
@@ -69,6 +70,7 @@ interface BirthdateRecord {
   birthdate: string
   name: string         // 家族や相性の相手の名前 (任意)
   relationship: string  // 関係性 (本人, 夫, 娘, 相性相手 など)
+  gender?: 'male' | 'female' | 'unspecified'
 }
 
 interface RegularUser {
@@ -116,6 +118,17 @@ interface TtsSpeechItem {
   isGift: boolean
   giftName?: string
   timestamp: number
+}
+
+const detectGender = (comment: string): 'male' | 'female' | 'unspecified' => {
+  const text = comment.toLowerCase()
+  if (text.includes('女性') || text.includes('女です') || text.includes('女の') || text.includes('私(女)') || text.includes('彼女') || text.includes('嫁') || text.includes('妻') || text.includes('母') || text.includes('娘') || text.includes('姉') || text.includes('妹') || text.includes('女子')) {
+    return 'female'
+  }
+  if (text.includes('男性') || text.includes('男です') || text.includes('男の') || text.includes('僕') || text.includes('俺') || text.includes('私(男)') || text.includes('彼氏') || text.includes('旦那') || text.includes('夫') || text.includes('父') || text.includes('息子') || text.includes('兄') || text.includes('弟') || text.includes('男子')) {
+    return 'male'
+  }
+  return 'unspecified'
 }
 
 interface PredictedQuestion {
@@ -213,6 +226,7 @@ export default function App() {
   const [newBirthdate, setNewBirthdate] = useState('')
   const [newBirthRelation, setNewBirthRelation] = useState('本人')
   const [newBirthName, setNewBirthName] = useState('')
+  const [newBirthGender, setNewBirthGender] = useState<'male' | 'female' | 'unspecified'>('unspecified')
 
   // 左カラムのタブ切り替え ('chat' | 'history')
   const [leftTab, setLeftTab] = useState<'chat' | 'history'>('chat')
@@ -369,7 +383,10 @@ export default function App() {
             let combinedBirth = regular.birthdate
             if (regular.birthdates && regular.birthdates.length > 0) {
               combinedBirth = regular.birthdates
-                .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
+                .map(b => {
+                  const genderStr = b.gender === 'male' ? '男性' : b.gender === 'female' ? '女性' : '未指定'
+                  return `${b.relationship}${b.name ? `(${b.name})` : ''}[${genderStr}]: ${b.birthdate}`
+                })
                 .join(', ')
             }
 
@@ -377,12 +394,14 @@ export default function App() {
               if (prevReqs.some(r => r.userId === msg.userId && r.status === 'pending')) {
                 return prevReqs
               }
+              const selfGender = regular.birthdates?.find(b => b.relationship === '本人')?.gender || detectGender(msg.comment)
               return [...prevReqs, {
                 id: msg.id || Math.random().toString(),
                 username: msg.username,
                 userId: msg.userId,
                 profilePictureUrl: msg.profilePictureUrl,
                 birthdate: combinedBirth,
+                gender: selfGender,
                 comment: msg.comment,
                 fortuneQuestion: suggestFortuneQuestion(msg.comment).text,
                 timestamp: Date.now(),
@@ -408,9 +427,10 @@ export default function App() {
 
     // 生年月日が自動抽出されたリクエスト受信
     newSocket.on('detected-fortune-request', (req: Omit<FortuneRequest, 'status'>) => {
+      const detectedGender = detectGender(req.comment)
       setFortuneRequests(prev => {
         if (prev.some(item => item.id === req.id)) return prev
-        return [...prev, { ...req, status: 'pending', fortuneQuestion: suggestFortuneQuestion(req.comment).text }]
+        return [...prev, { ...req, status: 'pending', gender: detectedGender, fortuneQuestion: suggestFortuneQuestion(req.comment).text }]
       })
 
       // 初回検知時または未登録ユーザーの場合に常連データを一時保存（生年月日紐付けのため）
@@ -425,7 +445,7 @@ export default function App() {
               profilePictureUrl: req.profilePictureUrl,
               birthdate: req.birthdate,
               birthdates: [
-                { id: '1', birthdate: req.birthdate, name: '', relationship: '本人' }
+                { id: '1', birthdate: req.birthdate, name: '', relationship: '本人', gender: detectedGender }
               ],
               history: [],
               totalDiamonds: 0,
@@ -437,15 +457,16 @@ export default function App() {
         } else {
           // すでに常連に登録されている場合、検出された生年月日がリストに無ければ自動追加
           const birthdatesList = user.birthdates || [
-            { id: '1', birthdate: user.birthdate, name: '', relationship: '本人' }
+            { id: '1', birthdate: user.birthdate, name: '', relationship: '本人', gender: 'unspecified' }
           ]
           const isAlreadyRegistered = birthdatesList.some(b => b.birthdate === req.birthdate)
           if (!isAlreadyRegistered) {
-            const newRecord = {
+            const newRecord: BirthdateRecord = {
               id: Math.random().toString(),
               birthdate: req.birthdate,
               name: '',
-              relationship: birthdatesList.length === 0 ? '本人' : `追加分${birthdatesList.length}`
+              relationship: birthdatesList.length === 0 ? '本人' : `追加分${birthdatesList.length}`,
+              gender: detectedGender
             }
             user.birthdates = [...birthdatesList, newRecord]
             const nextRegs = { ...prevRegs, [req.userId]: user }
@@ -634,6 +655,13 @@ export default function App() {
     )
   }
 
+  // 占い性別の更新
+  const handleUpdateGender = (id: string, gender: 'male' | 'female' | 'unspecified') => {
+    setFortuneRequests(prev =>
+      prev.map(item => item.id === id ? { ...item, gender } : item)
+    )
+  }
+
   // 鑑定開始処理（ライバーの手動承認）
   const handleStartFortune = (req: FortuneRequest) => {
     if (!socket) return
@@ -644,10 +672,17 @@ export default function App() {
       .map(log => log.comment)
       .slice(-5)
 
+    // 性別情報を生年月日文字列にマージする
+    let birthdateParam = req.birthdate
+    if (!birthdateParam.includes('[')) {
+      const genderStr = req.gender === 'male' ? '男性' : req.gender === 'female' ? '女性' : '未指定'
+      birthdateParam = `本人[${genderStr}]: ${req.birthdate}`
+    }
+
     socket.emit('start-fortune', {
       id: req.id,
       username: req.username,
-      birthdate: req.birthdate,
+      birthdate: birthdateParam,
       comment: req.fortuneQuestion || req.comment || '全体運について',
       chatHistory
     })
@@ -853,11 +888,12 @@ export default function App() {
       if (!user) return prevRegs
 
       const birthdatesList = user.birthdates || []
-      const newRecord = {
+      const newRecord: BirthdateRecord = {
         id: Math.random().toString(),
         birthdate: newBirthdate.trim(),
         name: newBirthName.trim(),
-        relationship: newBirthRelation.trim()
+        relationship: newBirthRelation.trim(),
+        gender: newBirthGender
       }
 
       const nextBirthdates = [...birthdatesList, newRecord]
@@ -876,6 +912,7 @@ export default function App() {
 
     setNewBirthdate('')
     setNewBirthName('')
+    setNewBirthGender('unspecified')
     setSystemAlert('生年月日を追加しました。鑑定待ちリストへ反映するには次回のリクエストから適用されます。')
   }
 
@@ -1290,8 +1327,33 @@ ${res.advice}
                           「{req.comment}」
                         </div>
 
+                        {/* 性別選択UI */}
+                        <div className="mt-2.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                          <span className="font-bold text-[9px] text-beige-700 uppercase">相談者の性別:</span>
+                          <div className="flex bg-beige-100/50 p-0.5 rounded border border-beige-200">
+                            {[
+                              { value: 'female', label: '👩 女性', activeClass: 'bg-pink-100 text-pink-800 border-pink-300 shadow-sm' },
+                              { value: 'male', label: '👨 男性', activeClass: 'bg-blue-100 text-blue-800 border-blue-300 shadow-sm' },
+                              { value: 'unspecified', label: '❔ 未指定', activeClass: 'bg-white text-muted-foreground shadow-sm' }
+                            ].map(opt => {
+                              const isActive = (req.gender || 'unspecified') === opt.value
+                              return (
+                                <button
+                                  key={opt.value}
+                                  onClick={() => handleUpdateGender(req.id, opt.value as any)}
+                                  className={`px-2 py-0.5 rounded text-[8px] font-semibold border transition-all ${
+                                    isActive ? opt.activeClass : 'bg-transparent border-transparent text-muted-foreground hover:text-beige-800'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+
                         {/* 占う内容の手動編集エリア */}
-                        <div className="mt-2.5 space-y-1" onClick={(e) => e.stopPropagation()}>
+                        <div className="mt-2 space-y-1" onClick={(e) => e.stopPropagation()}>
                           <span className="font-bold text-[9px] text-beige-700 block uppercase">占う内容（手動で修正できます）</span>
                           <Input
                             value={req.fortuneQuestion || ''}
@@ -1465,11 +1527,16 @@ ${res.advice}
                         <span className="font-bold text-[9px] text-sage-600 block uppercase">登録されている生年月日一覧:</span>
                         <div className="space-y-1">
                           {(activeRegular.birthdates || [
-                            { id: '1', birthdate: activeRegular.birthdate, name: '', relationship: '本人' }
+                            { id: '1', birthdate: activeRegular.birthdate, name: '', relationship: '本人', gender: 'unspecified' }
                           ]).map((b) => (
                             <div key={b.id} className="bg-white/80 p-1.5 rounded border border-sage-100 flex justify-between items-center text-[10px]">
                               <div>
                                 <Badge variant="outline" className="mr-1 py-0 px-1 bg-sage-50/50 text-[8px] scale-95">{b.relationship}</Badge>
+                                {b.gender && b.gender !== 'unspecified' && (
+                                  <Badge variant="outline" className={`mr-1.5 py-0 px-1 text-[8px] scale-95 border-0 font-bold ${b.gender === 'female' ? 'bg-pink-50 text-pink-700' : 'bg-blue-50 text-blue-700'}`}>
+                                    {b.gender === 'female' ? '女性' : '男性'}
+                                  </Badge>
+                                )}
                                 {b.name && <span className="font-semibold text-beige-800 mr-1.5">{b.name}</span>}
                                 <span className="font-mono text-sage-700">{b.birthdate}</span>
                               </div>
@@ -1500,6 +1567,15 @@ ${res.advice}
                             onChange={(e) => setNewBirthName(e.target.value)}
                             className="h-7 text-[9px] px-1.5 w-16 bg-white"
                           />
+                          <select
+                            value={newBirthGender}
+                            onChange={(e) => setNewBirthGender(e.target.value as any)}
+                            className="h-7 text-[9px] px-1 bg-white border border-beige-200 rounded text-muted-foreground focus:outline-none"
+                          >
+                            <option value="unspecified">性別未指定</option>
+                            <option value="female">👩 女性</option>
+                            <option value="male">👨 男性</option>
+                          </select>
                           <Input 
                             placeholder="例: 1983/11/30"
                             value={newBirthdate}
