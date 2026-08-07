@@ -1135,40 +1135,46 @@ ${res.advice}
             </Badge>
           )}
 
-          {!useStandaloneMode && (
-            <div className="flex items-center gap-2 bg-white/80 p-1.5 rounded-lg border border-beige-200 shadow-inner">
-              <Input 
-                placeholder="TikTokユーザー名" 
-                value={tiktokUsername} 
-                onChange={(e) => setTiktokUsername(e.target.value)}
-                className="h-8 w-40 text-xs border-0 bg-transparent focus-visible:ring-0"
-                disabled={tiktokConnected === 'connected' || tiktokConnected === 'connecting'}
-              />
-              {tiktokConnected === 'connected' ? (
-                <Button 
-                  variant="destructive" 
-                  size="sm" 
-                  className="h-7 text-xs font-semibold"
-                  onClick={handleDisconnectTiktok}
-                >
-                  切断する
-                </Button>
-              ) : (
-                <Button 
-                  variant="gold" 
-                  size="sm" 
-                  className="h-7 text-xs font-semibold"
-                  onClick={handleConnectTiktok}
-                  disabled={!tiktokUsername.trim() || tiktokConnected === 'connecting' || !serverConnected}
-                >
-                  {tiktokConnected === 'connecting' ? (
-                    <RefreshCw className="w-3 h-3 animate-spin mr-1" />
-                  ) : null}
-                  接続
-                </Button>
-              )}
-            </div>
-          )}
+          <div className="flex items-center gap-2 bg-white/80 p-1.5 rounded-lg border border-beige-200 shadow-inner">
+            <Input 
+              placeholder="TikTok配信者ユーザー名" 
+              value={tiktokUsername} 
+              onChange={(e) => setTiktokUsername(e.target.value)}
+              className="h-8 w-44 text-xs border-0 bg-transparent focus-visible:ring-0"
+              disabled={tiktokConnected === 'connected' || tiktokConnected === 'connecting'}
+            />
+            {tiktokConnected === 'connected' ? (
+              <Button 
+                variant="destructive" 
+                size="sm" 
+                className="h-7 text-xs font-semibold"
+                onClick={handleDisconnectTiktok}
+              >
+                切断する
+              </Button>
+            ) : (
+              <Button 
+                variant="gold" 
+                size="sm" 
+                className="h-7 text-xs font-semibold"
+                onClick={() => {
+                  if (useStandaloneMode) {
+                    setUseStandaloneMode(false)
+                    localStorage.setItem('fortune_standalone_mode', 'false')
+                    setSystemAlert(`配信者「${tiktokUsername}」にLIVE自動接続するため、ローカルサーバー連携モードに切り替えました。`)
+                  }
+                  handleConnectTiktok()
+                }}
+                disabled={!tiktokUsername.trim() || tiktokConnected === 'connecting'}
+                title="指定したTikTok配信者のLIVEチャットに自動接続します"
+              >
+                {tiktokConnected === 'connecting' ? (
+                  <RefreshCw className="w-3 h-3 animate-spin mr-1" />
+                ) : null}
+                LIVE接続
+              </Button>
+            )}
+          </div>
 
           <Button
             variant="outline"
