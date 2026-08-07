@@ -222,7 +222,7 @@ JSON構造：
   }
 }
 
-io.on('connection', (socket) => {
+io.on('connection', (socket: any) => {
   console.log(`Client connected: ${socket.id}`);
 
   // TikTok Live接続要求
