@@ -1159,19 +1159,18 @@ ${res.advice}
                 className="h-7 text-xs font-semibold"
                 onClick={() => {
                   if (useStandaloneMode) {
-                    setUseStandaloneMode(false)
-                    localStorage.setItem('fortune_standalone_mode', 'false')
-                    setSystemAlert(`配信者「${tiktokUsername}」にLIVE自動接続するため、ローカルサーバー連携モードに切り替えました。`)
+                    setSystemAlert(`配信者「${tiktokUsername.trim()}」を設定しました。（※サーバー不要モードで動作中のため、左側のコメント入力欄または模擬テストから自由に鑑定をお試しいただけます）`)
+                  } else {
+                    handleConnectTiktok()
                   }
-                  handleConnectTiktok()
                 }}
                 disabled={!tiktokUsername.trim() || tiktokConnected === 'connecting'}
-                title="指定したTikTok配信者のLIVEチャットに自動接続します"
+                title="TikTok配信者名（LIVEチャット監視対象）を設定します"
               >
                 {tiktokConnected === 'connecting' ? (
                   <RefreshCw className="w-3 h-3 animate-spin mr-1" />
                 ) : null}
-                LIVE接続
+                配信者を設定
               </Button>
             )}
           </div>
