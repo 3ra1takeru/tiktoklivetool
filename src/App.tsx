@@ -18,8 +18,7 @@ import {
   VolumeX,
   Trash2,
   Flame,
-  Send,
-  Cpu
+  Send
 } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from './components/ui/card'
@@ -184,14 +183,8 @@ const suggestFortuneQuestion = (comment: string): PredictedQuestion => {
 
 export default function App() {
   const [socket, setSocket] = useState<Socket | null>(null)
-  
-  // 動作モード（ブラウザ単体AIモード / ローカルサーバー接続モード）
-  const [useStandaloneMode, setUseStandaloneMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('fortune_standalone_mode')
-    return saved !== null ? saved === 'true' : true // デフォルトはサーバー不要モード
-  })
 
-  // Gemini APIキー（ブラウザ直接生成用）
+  // Gemini APIキー（バックアップ用）
   const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
     return localStorage.getItem('fortune_gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || ''
   })
@@ -204,7 +197,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState('')
   const [systemAlert, setSystemAlert] = useState<string | null>(null)
 
-  // 手動チャット入力（スタンドアロン・テスト用）
+  // 手動チャット入力（テスト用）
   const [manualUsername, setManualUsername] = useState('')
   const [manualComment, setManualComment] = useState('')
 
@@ -233,7 +226,7 @@ export default function App() {
 
   // サーバー接続設定
   const [apiUrl, setApiUrl] = useState(() => {
-    return localStorage.getItem('fortune_api_url') || import.meta.env.VITE_API_URL || 'http://localhost:5001'
+    return localStorage.getItem('fortune_api_url') || import.meta.env.VITE_API_URL || 'https://tiktok-live-tool-server.onrender.com'
   })
   const [tempApiUrl, setTempApiUrl] = useState(apiUrl)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -267,8 +260,6 @@ export default function App() {
     const cleanKey = tempGeminiApiKey.trim()
     localStorage.setItem('fortune_gemini_api_key', cleanKey)
     setGeminiApiKey(cleanKey)
-
-    localStorage.setItem('fortune_standalone_mode', String(useStandaloneMode))
 
     setIsSettingsOpen(false)
     setSystemAlert('設定を保存しました。')
@@ -474,14 +465,9 @@ export default function App() {
 
   // Socket.io サーバーとの通信ライフサイクル
   useEffect(() => {
-    if (useStandaloneMode) {
-      setServerConnected(false)
-      return
-    }
-
     const newSocket = io(apiUrl, {
-      reconnectionAttempts: 2,
-      timeout: 3000,
+      reconnectionAttempts: 5,
+      timeout: 5000,
       autoConnect: true
     })
     setSocket(newSocket)
@@ -493,7 +479,7 @@ export default function App() {
 
     newSocket.on('connect_error', () => {
       setServerConnected(false)
-      setErrorMessage('ローカルサーバーへの接続に失敗しました。画面右上の設定から「サーバー不要（ブラウザAI）モード」をお試しください。')
+      setErrorMessage('サーバーへの接続を試行しています...（右上の設定アイコンからサーバー接続URLを確認できます）')
     })
 
     newSocket.on('disconnect', () => {
@@ -507,7 +493,7 @@ export default function App() {
         setErrorMessage('')
       } else if (data.status === 'error') {
         setTiktokConnected('error')
-        setErrorMessage(data.error || 'TikTok Liveへの接続中にエラーが発生しました。')
+        setErrorMessage(data.error || 'TikTok Liveへの接続中にエラーが発生しました。配信中であることを確認してください。')
       } else {
         setTiktokConnected('disconnected')
       }
@@ -623,7 +609,7 @@ export default function App() {
     return () => {
       newSocket.disconnect()
     }
-  }, [apiUrl, useStandaloneMode])
+  }, [apiUrl])
 
   // チャットログ更新時の自動スクロール
   useEffect(() => {
@@ -698,7 +684,7 @@ export default function App() {
     })
   }
 
-  // 鑑定開始処理（サーバー接続 / クライアント直接AI の両対応）
+  // 鑑定開始処理（サーバー接続 / クライアントAI の両対応）
   const handleStartFortune = async (req: FortuneRequest) => {
     const chatHistory = chatLogs
       .filter(log => log.userId === req.userId)
@@ -711,8 +697,7 @@ export default function App() {
       birthdateParam = `本人[${genderStr}]: ${req.birthdate}`
     }
 
-    // サーバー接続中でスタンドアロンモードでない場合は Socket.io 経由
-    if (serverConnected && socket && !useStandaloneMode) {
+    if (serverConnected && socket) {
       socket.emit('start-fortune', {
         id: req.id,
         username: req.username,
@@ -723,7 +708,7 @@ export default function App() {
       return
     }
 
-    // スタンドアロンモード（またはサーバー未接続時）：ブラウザ直呼び出しで Gemini AI 鑑定を実行
+    // バックアップ用クライアントAI鑑定
     setFortuneRequests(prev =>
       prev.map(item => item.id === req.id ? { ...item, status: 'loading' } : item)
     )
@@ -757,7 +742,7 @@ export default function App() {
     }
   }
 
-  // 手動コメント送信処理（スタンドアロン時・ライバーの手動入力用）
+  // 手動コメント送信処理（ライバーの手動入力用）
   const handleSendManualComment = () => {
     if (!manualComment.trim()) return
     const name = manualUsername.trim() || 'リスナー'
@@ -1122,18 +1107,11 @@ ${res.advice}
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {/* 動作モード・接続状態表示 */}
-          {useStandaloneMode ? (
-            <Badge variant="outline" className="flex gap-1.5 items-center px-3 py-1 text-xs border-purple-300 bg-purple-50 text-purple-800 font-semibold shadow-xs">
-              <Cpu className="w-3.5 h-3.5 text-purple-600" />
-              ブラウザ直接AI（サーバー不要）
-            </Badge>
-          ) : (
-            <Badge variant={serverConnected ? 'sage' : 'destructive'} className="flex gap-1 items-center px-3 py-1 text-xs">
-              {serverConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-              {serverConnected ? 'サーバー接続中' : 'サーバー未接続'}
-            </Badge>
-          )}
+          {/* サーバー通信ステータス表示 */}
+          <Badge variant={serverConnected ? 'sage' : 'destructive'} className="flex gap-1.5 items-center px-3 py-1 text-xs">
+            {serverConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+            {serverConnected ? 'LIVE通信接続中' : 'サーバー未接続'}
+          </Badge>
 
           <div className="flex items-center gap-2 bg-white/80 p-1.5 rounded-lg border border-beige-200 shadow-inner">
             <Input 
@@ -1157,20 +1135,14 @@ ${res.advice}
                 variant="gold" 
                 size="sm" 
                 className="h-7 text-xs font-semibold"
-                onClick={() => {
-                  if (useStandaloneMode) {
-                    setSystemAlert(`配信者「${tiktokUsername.trim()}」を設定しました。（※サーバー不要モードで動作中のため、左側のコメント入力欄または模擬テストから自由に鑑定をお試しいただけます）`)
-                  } else {
-                    handleConnectTiktok()
-                  }
-                }}
+                onClick={handleConnectTiktok}
                 disabled={!tiktokUsername.trim() || tiktokConnected === 'connecting'}
-                title="TikTok配信者名（LIVEチャット監視対象）を設定します"
+                title="指定したTikTok配信者のLIVEチャットに自動接続します"
               >
                 {tiktokConnected === 'connecting' ? (
                   <RefreshCw className="w-3 h-3 animate-spin mr-1" />
                 ) : null}
-                配信者を設定
+                LIVE接続
               </Button>
             )}
           </div>
@@ -1210,7 +1182,7 @@ ${res.advice}
             size="icon" 
             className="h-9 w-9 border-beige-200 hover:bg-beige-100 shrink-0" 
             onClick={() => setIsSettingsOpen(true)}
-            title="設定 (AI・接続・読み上げ)"
+            title="システム設定"
           >
             <Settings className="w-4 h-4 text-sage-700" />
           </Button>
@@ -1223,19 +1195,7 @@ ${res.advice}
             <AlertCircle className="w-5 h-5 flex-shrink-0 text-amber-600" />
             <div>{errorMessage}</div>
           </div>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="h-8 text-xs border-amber-300 bg-white text-amber-800 hover:bg-amber-100 shrink-0"
-            onClick={() => {
-              setUseStandaloneMode(true)
-              localStorage.setItem('fortune_standalone_mode', 'true')
-              setErrorMessage('')
-              setSystemAlert('「ブラウザ直接AIモード（サーバー不要）」に切り替えました。パソコンでサーバーを立ち上げなくても完全に動作します！')
-            }}
-          >
-            サーバー不要モードに切替
-          </Button>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-amber-800 hover:bg-amber-100" onClick={() => setErrorMessage('')}>閉じる</Button>
         </div>
       )}
 
@@ -1318,8 +1278,8 @@ ${res.advice}
                   {chatLogs.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-6 text-center">
                       <Clock className="w-8 h-8 text-sage-300 mb-2 animate-pulse" />
-                      <p className="text-xs">チャット監視をお待ちしています</p>
-                      <p className="text-[10px] text-sage-500 mt-1">上の入力欄からコメントを追加するか、「テスト」ボタンを押してください</p>
+                      <p className="text-xs font-semibold text-sage-700">チャット監視をお待ちしています</p>
+                      <p className="text-[10px] text-sage-500 mt-1">ヘッダーで配信者名を指定して「LIVE接続」を押すとコメントが流れてきます</p>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -1818,50 +1778,29 @@ ${res.advice}
                 システム設定
               </CardTitle>
               <CardDescription className="text-xs">
-                動作モード、Gemini AI APIキー、読み上げの設定を変更できます。
+                バックエンドサーバーURL、Gemini AI APIキー、読み上げの設定を行えます。
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 text-xs">
 
-              {/* 動作モードの設定 */}
-              <div className="space-y-2 p-3 rounded-xl bg-purple-50/60 border border-purple-200">
-                <label className="font-bold text-purple-900 flex items-center gap-1.5">
-                  <Cpu className="w-4 h-4 text-purple-600" />
-                  動作モード設定
-                </label>
-                <div className="flex items-center gap-3 pt-1">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="mode"
-                      checked={useStandaloneMode}
-                      onChange={() => setUseStandaloneMode(true)}
-                      className="accent-purple-600"
-                    />
-                    <span className="font-semibold text-purple-900">ブラウザ直接AIモード（サーバー不要）</span>
-                  </label>
-                </div>
-                <div className="flex items-center gap-3 pt-1">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="mode"
-                      checked={!useStandaloneMode}
-                      onChange={() => setUseStandaloneMode(false)}
-                      className="accent-purple-600"
-                    />
-                    <span className="text-sage-700">ローカルサーバー連携モード (Socket.io)</span>
-                  </label>
-                </div>
-                <p className="text-[10px] text-purple-700 leading-tight pt-1">
-                  ※「ブラウザ直接AIモード」を選べば、自分のPCでバックエンドサーバーを起動しなくても即座にAI鑑定が利用できます。
+              {/* サーバーURL設定 */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-sage-800">サーバー接続URL (Socket.io)</label>
+                <Input 
+                  value={tempApiUrl}
+                  onChange={(e) => setTempApiUrl(e.target.value)}
+                  placeholder="https://tiktok-live-tool-server.onrender.com"
+                  className="h-8 text-xs bg-beige-50/50 font-mono"
+                />
+                <p className="text-[10px] text-sage-500">
+                  ※Render.com等で構築された常時接続バックエンドサーバーのURLを入力します。
                 </p>
               </div>
 
               {/* Gemini APIキー設定 */}
               <div className="space-y-1.5">
                 <label className="font-bold text-sage-800 flex items-center justify-between">
-                  <span>Gemini APIキー (任意)</span>
+                  <span>Gemini APIキー (任意/バックアップ用)</span>
                 </label>
                 <Input 
                   type="password"
@@ -1870,22 +1809,7 @@ ${res.advice}
                   placeholder="AIZASy..."
                   className="h-8 text-xs bg-beige-50/50"
                 />
-                <p className="text-[10px] text-sage-500">
-                  ※APIキーが未入力の場合はサンプル毒舌鑑定結果が自動生成されます。APIキーを設定するとGoogle AIによる完全オリジナルの高精度鑑定が動きます。
-                </p>
               </div>
-
-              {!useStandaloneMode && (
-                <div className="space-y-1.5">
-                  <label className="font-bold text-sage-800">サーバー接続URL (Socket.io)</label>
-                  <Input 
-                    value={tempApiUrl}
-                    onChange={(e) => setTempApiUrl(e.target.value)}
-                    placeholder="http://localhost:5001"
-                    className="h-8 text-xs bg-beige-50/50"
-                  />
-                </div>
-              )}
 
               {/* 読み上げ設定 */}
               <div className="space-y-3 pt-2 border-t border-beige-200">
