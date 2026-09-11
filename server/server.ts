@@ -13,6 +13,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ブラウザ直接アクセス確認用エンドポイント
+app.get('/', (_req, res) => {
+  res.send('🎉 TikTok Live Tool Server is running successfully!');
+});
+
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: Date.now() });
+});
+
 const server = createServer(app);
 const io = new Server(server, {
   cors: {

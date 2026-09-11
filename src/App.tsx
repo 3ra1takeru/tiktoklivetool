@@ -242,8 +242,15 @@ export default function App() {
   const [ttsRate, setTtsRate] = useState(() => {
     return parseFloat(localStorage.getItem('fortune_tts_rate') || '1.0')
   })
-  const [ttsVolume] = useState(() => {
+  const [ttsVolume, setTtsVolume] = useState(() => {
     return parseFloat(localStorage.getItem('fortune_tts_volume') || '1.0')
+  })
+  const [ttsPitch, setTtsPitch] = useState(() => {
+    return parseFloat(localStorage.getItem('fortune_tts_pitch') || '1.0')
+  })
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState(() => {
+    return localStorage.getItem('fortune_tts_voice_uri') || ''
   })
 
   // 読み上げ用の音声トリガーキュー
@@ -265,6 +272,39 @@ export default function App() {
     setSystemAlert('設定を保存しました。')
   }
 
+  // 利用可能な音声リストの読み込み
+  useEffect(() => {
+    const loadVoices = () => {
+      if (!('speechSynthesis' in window)) return
+      const voices = window.speechSynthesis.getVoices()
+      if (voices.length === 0) return
+
+      // 日本語音声を最優先にしてソート
+      const sorted = [...voices].sort((a, b) => {
+        const aJa = a.lang.includes('ja') ? 1 : 0
+        const bJa = b.lang.includes('ja') ? 1 : 0
+        if (aJa !== bJa) return bJa - aJa
+        return a.name.localeCompare(b.name)
+      })
+      setAvailableVoices(sorted)
+
+      // まだ選択されていない場合は最初の日本語ボイスをデフォルト選択
+      if (!selectedVoiceURI) {
+        const defaultJa = sorted.find(v => v.lang.includes('ja'))
+        if (defaultJa) {
+          const key = defaultJa.voiceURI || defaultJa.name
+          setSelectedVoiceURI(key)
+          localStorage.setItem('fortune_tts_voice_uri', key)
+        }
+      }
+    }
+
+    loadVoices()
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.onvoiceschanged = loadVoices
+    }
+  }, [selectedVoiceURI])
+
   // 読み上げ設定の保存
   useEffect(() => {
     localStorage.setItem('fortune_tts_enabled', String(isTtsEnabled))
@@ -277,6 +317,20 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('fortune_tts_rate', String(ttsRate))
   }, [ttsRate])
+
+  useEffect(() => {
+    localStorage.setItem('fortune_tts_volume', String(ttsVolume))
+  }, [ttsVolume])
+
+  useEffect(() => {
+    localStorage.setItem('fortune_tts_pitch', String(ttsPitch))
+  }, [ttsPitch])
+
+  useEffect(() => {
+    if (selectedVoiceURI) {
+      localStorage.setItem('fortune_tts_voice_uri', selectedVoiceURI)
+    }
+  }, [selectedVoiceURI])
 
   // 音声読み上げ用絵文字クリーンアップ ＆ 12文字トリミング
   const cleanTtsName = (name: string): string => {
@@ -296,9 +350,22 @@ export default function App() {
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ja-JP'
     utterance.rate = ttsRate
+    utterance.pitch = ttsPitch
     utterance.volume = ttsVolume
 
+    if (selectedVoiceURI && availableVoices.length > 0) {
+      const voice = availableVoices.find(v => (v.voiceURI || v.name) === selectedVoiceURI)
+      if (voice) {
+        utterance.voice = voice
+      }
+    }
+
     window.speechSynthesis.speak(utterance)
+  }
+
+  // 設定画面でのテスト読み上げ
+  const handleTestSpeech = () => {
+    speakText('こんにちは！読み上げ音声のテストです。よろしくお願いいたします！')
   }
 
   // 読み上げトリガーキューの監視
@@ -1813,29 +1880,161 @@ ${res.advice}
 
               {/* 読み上げ設定 */}
               <div className="space-y-3 pt-2 border-t border-beige-200">
-                <div className="font-bold text-sage-800">音声読み上げ設定 (TTS)</div>
                 <div className="flex items-center justify-between">
-                  <span>読み上げ対象</span>
-                  <select 
-                    value={ttsMode}
-                    onChange={(e) => setTtsMode(e.target.value as 'all' | 'fortune')}
-                    className="h-7 text-xs rounded border border-beige-300 bg-white px-2"
+                  <div className="font-bold text-sage-800 flex items-center gap-1.5">
+                    <Volume2 className="w-4 h-4 text-gold-600" />
+                    <span>音声読み上げ設定 (TTS)</span>
+                  </div>
+                  <label className="flex items-center gap-1.5 text-xs text-sage-700 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={isTtsEnabled} 
+                      onChange={(e) => setIsTtsEnabled(e.target.checked)}
+                      className="accent-gold-500 w-3.5 h-3.5 cursor-pointer rounded"
+                    />
+                    <span className="font-medium">読み上げを有効化</span>
+                  </label>
+                </div>
+
+                {/* 読み上げ対象 */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-sage-600 uppercase tracking-wider block">読み上げ対象</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTtsMode('all')}
+                      className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg border transition-all ${
+                        ttsMode === 'all'
+                          ? 'border-gold-500 bg-gold-50 text-gold-900 shadow-2xs'
+                          : 'border-beige-200 hover:bg-beige-50 text-sage-600'
+                      }`}
+                    >
+                      すべてのチャット
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTtsMode('fortune')}
+                      className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg border transition-all ${
+                        ttsMode === 'fortune'
+                          ? 'border-gold-500 bg-gold-50 text-gold-900 shadow-2xs'
+                          : 'border-beige-200 hover:bg-beige-50 text-sage-600'
+                      }`}
+                    >
+                      生年月日あり / 常連のみ
+                    </button>
+                  </div>
+                </div>
+
+                {/* 声の種類（ボイス選択） */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-sage-600 uppercase tracking-wider block">
+                    声の種類（キャラクター）
+                  </label>
+                  <select
+                    value={selectedVoiceURI}
+                    onChange={(e) => setSelectedVoiceURI(e.target.value)}
+                    className="w-full text-xs bg-white border border-beige-300 rounded-lg px-2.5 py-1.5 text-stone-800 focus:outline-none focus:ring-2 focus:ring-gold-400 font-medium transition-all shadow-2xs"
                   >
-                    <option value="all">すべてのチャット</option>
-                    <option value="fortune">生年月日あり / 常連のみ</option>
+                    {availableVoices.length === 0 ? (
+                      <option value="">ブラウザ標準の音声</option>
+                    ) : (
+                      <>
+                        <optgroup label="🇯🇵 日本語音声（おすすめ）">
+                          {availableVoices
+                            .filter(v => v.lang.includes('ja'))
+                            .map((v) => (
+                              <option key={v.voiceURI || v.name} value={v.voiceURI || v.name}>
+                                {v.name}
+                              </option>
+                            ))}
+                        </optgroup>
+                        {availableVoices.some(v => !v.lang.includes('ja')) && (
+                          <optgroup label="🌐 その他言語">
+                            {availableVoices
+                              .filter(v => !v.lang.includes('ja'))
+                              .slice(0, 15)
+                              .map((v) => (
+                                <option key={v.voiceURI || v.name} value={v.voiceURI || v.name}>
+                                  {v.name} ({v.lang})
+                                </option>
+                              ))}
+                          </optgroup>
+                        )}
+                      </>
+                    )}
                   </select>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span>読み上げ速度: {ttsRate.toFixed(1)}x</span>
+
+                {/* 声の高さ（トーン・ピッチ） */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-sage-700">
+                    <span className="font-medium">声の高さ（トーン）</span>
+                    <span className="font-semibold text-gold-800">
+                      {ttsPitch < 0.9 ? '落ち着いた低音' : ttsPitch > 1.1 ? '明るい高音' : '標準'} ({ttsPitch.toFixed(1)})
+                    </span>
+                  </div>
                   <input 
                     type="range" 
-                    min="0.5" 
-                    max="2.0" 
+                    min="0.6" 
+                    max="1.5" 
                     step="0.1"
-                    value={ttsRate}
-                    onChange={(e) => setTtsRate(parseFloat(e.target.value))}
-                    className="w-32"
+                    value={ttsPitch}
+                    onChange={(e) => setTtsPitch(parseFloat(e.target.value))}
+                    className="w-full accent-gold-500 cursor-pointer h-1.5 bg-beige-100 rounded-lg appearance-none"
                   />
+                  <div className="flex justify-between text-[9px] text-sage-500 px-0.5">
+                    <span>低音（大人風）</span>
+                    <span>標準</span>
+                    <span>高音（明るい声）</span>
+                  </div>
+                </div>
+
+                {/* 速度 & 音量 */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs text-sage-700">
+                      <span className="font-medium">速度</span>
+                      <span className="font-semibold text-gold-800">{ttsRate.toFixed(1)}x</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0.5" 
+                      max="2.0" 
+                      step="0.1"
+                      value={ttsRate}
+                      onChange={(e) => setTtsRate(parseFloat(e.target.value))}
+                      className="w-full accent-gold-500 cursor-pointer h-1.5 bg-beige-100 rounded-lg appearance-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs text-sage-700">
+                      <span className="font-medium">音量</span>
+                      <span className="font-semibold text-gold-800">{Math.round(ttsVolume * 100)}%</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0.0" 
+                      max="1.0" 
+                      step="0.1"
+                      value={ttsVolume}
+                      onChange={(e) => setTtsVolume(parseFloat(e.target.value))}
+                      className="w-full accent-gold-500 cursor-pointer h-1.5 bg-beige-100 rounded-lg appearance-none"
+                    />
+                  </div>
+                </div>
+
+                {/* テスト発話ボタン */}
+                <div className="pt-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleTestSpeech}
+                    className="w-full h-8 text-xs font-semibold border-gold-300 bg-gold-50/70 hover:bg-gold-100 text-gold-900 transition-all flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Volume2 className="w-3.5 h-3.5 text-gold-600" />
+                    この設定で声をテスト再生
+                  </Button>
                 </div>
               </div>
 
