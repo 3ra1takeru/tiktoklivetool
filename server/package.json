@@ -15,7 +15,7 @@
     "express": "^4.19.2",
     "live-tool": "file:..",
     "socket.io": "^4.7.5",
-    "tiktok-live-connector": "^2.1.0"
+    "tiktok-live-connector": "2.5.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

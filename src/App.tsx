@@ -197,6 +197,16 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState('')
   const [systemAlert, setSystemAlert] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (tiktokConnected !== 'connecting') return
+    const timer = window.setTimeout(() => {
+      socket?.emit('leave-tiktok')
+      setTiktokConnected('error')
+      setErrorMessage('LIVE接続が時間切れになりました。ユーザーID・配信状況・中継サーバーの設定を確認してください。')
+    }, 55000)
+    return () => window.clearTimeout(timer)
+  }, [tiktokConnected, socket])
+
   // 手動チャット入力（テスト用）
   const [manualUsername, setManualUsername] = useState('')
   const [manualComment, setManualComment] = useState('')
@@ -226,7 +236,7 @@ export default function App() {
 
   // サーバー接続設定
   const [apiUrl, setApiUrl] = useState(() => {
-    return localStorage.getItem('fortune_api_url') || import.meta.env.VITE_API_URL || 'https://tiktok-live-tool-server.onrender.com'
+    return localStorage.getItem('fortune_api_url') || import.meta.env.VITE_API_URL || 'https://tiktoklivetool.onrender.com'
   })
   const [tempApiUrl, setTempApiUrl] = useState(apiUrl)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -534,7 +544,7 @@ export default function App() {
   useEffect(() => {
     const newSocket = io(apiUrl, {
       reconnectionAttempts: 5,
-      timeout: 5000,
+      timeout: 20000,
       autoConnect: true
     })
     setSocket(newSocket)
@@ -685,7 +695,7 @@ export default function App() {
 
   // TikTok Liveへの接続処理
   const handleConnectTiktok = () => {
-    if (!socket || !tiktokUsername.trim()) return
+    if (!socket?.connected || !tiktokUsername.trim()) return
     setTiktokConnected('connecting')
     setErrorMessage('')
     socket.emit('join-tiktok', tiktokUsername.trim())
@@ -1177,12 +1187,12 @@ ${res.advice}
           {/* サーバー通信ステータス表示 */}
           <Badge variant={serverConnected ? 'sage' : 'destructive'} className="flex gap-1.5 items-center px-3 py-1 text-xs">
             {serverConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-            {serverConnected ? 'LIVE通信接続中' : 'サーバー未接続'}
+            {serverConnected ? '中継サーバー接続中' : 'サーバー未接続'}
           </Badge>
 
           <div className="flex items-center gap-2 bg-white/80 p-1.5 rounded-lg border border-beige-200 shadow-inner">
             <Input 
-              placeholder="TikTok配信者ユーザー名" 
+              placeholder="@ユーザーID またはLIVE URL"
               value={tiktokUsername} 
               onChange={(e) => setTiktokUsername(e.target.value)}
               className="h-8 w-44 text-xs border-0 bg-transparent focus-visible:ring-0"
@@ -1203,7 +1213,7 @@ ${res.advice}
                 size="sm" 
                 className="h-7 text-xs font-semibold"
                 onClick={handleConnectTiktok}
-                disabled={!tiktokUsername.trim() || tiktokConnected === 'connecting'}
+                disabled={!serverConnected || !tiktokUsername.trim() || tiktokConnected === 'connecting'}
                 title="指定したTikTok配信者のLIVEチャットに自動接続します"
               >
                 {tiktokConnected === 'connecting' ? (
@@ -1856,7 +1866,7 @@ ${res.advice}
                 <Input 
                   value={tempApiUrl}
                   onChange={(e) => setTempApiUrl(e.target.value)}
-                  placeholder="https://tiktok-live-tool-server.onrender.com"
+                  placeholder="https://tiktoklivetool.onrender.com"
                   className="h-8 text-xs bg-beige-50/50 font-mono"
                 />
                 <p className="text-[10px] text-sage-500">
