@@ -1,10 +1,10 @@
 import express from 'express';
 import { createServer } from 'http';
+import { EventEmitter } from 'node:events';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
-// @ts-ignore
-import { WebcastPushConnection } from 'tiktok-live-connector';
+import { TikTokLiveConnection } from 'tiktok-live-connector';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 dotenv.config();
@@ -37,7 +37,39 @@ const apiKey = process.env.GEMINI_API_KEY || '';
 const genAI = apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE' ? new GoogleGenerativeAI(apiKey) : null;
 
 // アクティブなTikTok接続の管理
-const activeConnections = new Map<string, WebcastPushConnection>();
+const activeConnections = new Map<string, TikTokLiveConnection>();
+
+function closeTikTok(socketId: string) {
+  const connection = activeConnections.get(socketId);
+  activeConnections.delete(socketId);
+  if (connection) void connection.disconnect().catch(err => console.error('Disconnect failed:', err));
+}
+
+function normalizeUsername(input: unknown): string {
+  if (typeof input !== 'string') throw new Error('TikTokのユーザーIDを入力してください。');
+  let username = input.trim();
+  if (/^https?:\/\//i.test(username)) {
+    const url = new URL(username);
+    if (!['tiktok.com', 'www.tiktok.com', 'm.tiktok.com'].includes(url.hostname)) {
+      throw new Error('TikTokのプロフィールまたはLIVEのURLを入力してください。');
+    }
+    username = url.pathname.match(/^\/@([^/]+)(?:\/live)?\/?$/)?.[1] || '';
+  }
+  username = username.replace(/^@/, '');
+  if (!/^[a-zA-Z0-9_.]{1,24}$/.test(username)) {
+    throw new Error('表示名ではなく、@から始まるユーザーID（半角英数字・_・.）を入力してください。');
+  }
+  return username;
+}
+
+function connectionError(error: any): string {
+  const detail = error?.message || error?.exception?.message || String(error);
+  if (/offline|not live/i.test(detail)) return 'このアカウントは現在LIVE中ではありません。ユーザーIDと配信状況を確認してください。';
+  if (/sign|euler|429|rate.?limit|api.?key/i.test(detail)) {
+    return 'TikTok接続用の署名サービスでエラーが発生しました。サーバーのEULER_STREAM_API_KEY設定や利用制限を確認してください。';
+  }
+  return `TikTok LIVEへの接続に失敗しました。ユーザーID・配信状況を確認してください。詳細: ${detail}`;
+}
 
 // 生年月日抽出ロジック
 function extractBirthDate(text: string): string | null {
@@ -238,38 +270,54 @@ io.on('connection', (socket: any) => {
   socket.on('join-tiktok', async (username: string) => {
     console.log(`Request to connect to TikTok Live: ${username}`);
     
-    // 既存の接続があれば切断
-    if (activeConnections.has(socket.id)) {
-      try {
-        activeConnections.get(socket.id)?.disconnect();
-        activeConnections.delete(socket.id);
-      } catch (err) {
-        console.error('Error disconnecting existing connection:', err);
-      }
-    }
+    closeTikTok(socket.id);
 
     try {
-      const tiktokConnect = new WebcastPushConnection(username);
-      
+      username = normalizeUsername(username);
+      const tiktokConnect = new TikTokLiveConnection(username, {
+        signApiKey: process.env.EULER_STREAM_API_KEY || undefined,
+        enableExtendedGiftInfo: true
+      }) as TikTokLiveConnection & EventEmitter;
+      // Connector 2.5's typed-emitter declarations omit inherited methods under NodeNext.
+      activeConnections.set(socket.id, tiktokConnect);
+      const isCurrent = () => socket.connected && activeConnections.get(socket.id) === tiktokConnect;
+      const timeout = setTimeout(() => {
+        if (!isCurrent()) return;
+        closeTikTok(socket.id);
+        socket.emit('tiktok-status', { status: 'error', error: 'TikTok LIVEへの接続が時間切れになりました。配信状況を確認して再接続してください。' });
+      }, 45000);
+      const emit = socket.emit.bind(socket);
+      // 古い接続から遅れて届いたイベントを新しい接続へ混ぜない
+      const emitCurrent = (event: string, data: any) => { if (isCurrent()) emit(event, data); };
       tiktokConnect.connect().then((state: any) => {
-        console.log(`Successfully connected to TikTok Live for ${username}. Room ID: ${state.roomId}`);
-        socket.emit('tiktok-status', { status: 'connected', username, roomId: state.roomId });
+        clearTimeout(timeout);
+        if (!isCurrent()) { void tiktokConnect.disconnect().catch(() => {}); return; }
+        emitCurrent('tiktok-status', { status: 'connected', username, roomId: state.roomId });
       }).catch((err: any) => {
+        clearTimeout(timeout);
         console.error(`Failed to connect to TikTok Live for ${username}:`, err);
-        socket.emit('tiktok-status', { status: 'error', error: err.message || '接続に失敗しました。配信中であることを確認してください。' });
+        if (!isCurrent()) return;
+        emitCurrent('tiktok-status', { status: 'error', error: connectionError(err) });
+        closeTikTok(socket.id);
+      });
+      tiktokConnect.on('disconnected', () => {
+        clearTimeout(timeout);
+        if (!isCurrent()) return;
+        emitCurrent('tiktok-status', { status: 'disconnected' });
+        closeTikTok(socket.id);
       });
 
       // チャットイベントの監視
       tiktokConnect.on('chat', (data: any) => {
         const comment = data.comment;
-        const nickname = data.nickname || data.uniqueId;
-        const uniqueId = data.uniqueId;
-        const profilePictureUrl = data.profilePictureUrl;
+        const nickname = data.user?.nickname || data.user?.uniqueId;
+        const uniqueId = data.user?.uniqueId;
+        const profilePictureUrl = data.user?.avatarThumb?.urlList?.[0];
 
         // 全コメントをログとして流す
         const birthdate = extractBirthDate(comment);
-        socket.emit('chat-log', {
-          id: data.msgId || Math.random().toString(),
+        emitCurrent('chat-log', {
+          id: data.common?.msgId || Math.random().toString(),
           username: nickname,
           userId: uniqueId,
           comment,
@@ -281,8 +329,8 @@ io.on('connection', (socket: any) => {
         // 生年月日の抽出テスト
         if (birthdate) {
           console.log(`Detected birthdate: ${birthdate} from user: ${nickname}`);
-          socket.emit('detected-fortune-request', {
-            id: data.msgId || Math.random().toString(),
+          emitCurrent('detected-fortune-request', {
+            id: data.common?.msgId || Math.random().toString(),
             username: nickname,
             userId: uniqueId,
             profilePictureUrl,
@@ -295,17 +343,17 @@ io.on('connection', (socket: any) => {
 
       // ギフトイベントの監視
       tiktokConnect.on('gift', (data: any) => {
-        const nickname = data.nickname || data.uniqueId;
-        const uniqueId = data.uniqueId;
-        const profilePictureUrl = data.profilePictureUrl;
-        const giftName = data.giftName;
-        const diamondCount = data.diamondCount || 0;
+        const nickname = data.user?.nickname || data.user?.uniqueId;
+        const uniqueId = data.user?.uniqueId;
+        const profilePictureUrl = data.user?.avatarThumb?.urlList?.[0];
+        const giftName = data.extendedGiftInfo?.name || data.gift?.name || `ギフト ${data.giftId}`;
+        const diamondCount = data.extendedGiftInfo?.diamondCount || data.gift?.diamondCount || 0;
         const repeatCount = data.repeatCount || 1;
 
         console.log(`Received gift: ${giftName} x${repeatCount} from ${nickname} (Diamonds: ${diamondCount})`);
 
-        socket.emit('gift-log', {
-          id: data.msgId || Math.random().toString(),
+        emitCurrent('gift-log', {
+          id: data.common?.msgId || Math.random().toString(),
           username: nickname,
           userId: uniqueId,
           profilePictureUrl,
@@ -319,16 +367,14 @@ io.on('connection', (socket: any) => {
       // エラーイベントの監視
       tiktokConnect.on('error', (err: any) => {
         console.error(`TikTok Live error for ${username}:`, err);
-        socket.emit('tiktok-status', { status: 'error', error: err.toString() });
+        emitCurrent('tiktok-status', { status: 'error', error: connectionError(err) });
       });
 
       // 配信終了イベントの監視
       tiktokConnect.on('streamEnd', () => {
         console.log(`Stream ended for ${username}`);
-        socket.emit('tiktok-status', { status: 'disconnected', message: '配信が終了しました。' });
+        emitCurrent('tiktok-status', { status: 'disconnected', message: '配信が終了しました。' });
       });
-
-      activeConnections.set(socket.id, tiktokConnect);
 
     } catch (error: any) {
       console.error(`Error initializing TikTok Live connection for ${username}:`, error);
@@ -338,16 +384,8 @@ io.on('connection', (socket: any) => {
 
   // TikTok Live切断要求
   socket.on('leave-tiktok', () => {
-    if (activeConnections.has(socket.id)) {
-      console.log(`Disconnecting TikTok Live for socket ${socket.id}`);
-      try {
-        activeConnections.get(socket.id)?.disconnect();
-        activeConnections.delete(socket.id);
-        socket.emit('tiktok-status', { status: 'disconnected' });
-      } catch (err) {
-        console.error('Error disconnecting:', err);
-      }
-    }
+    closeTikTok(socket.id);
+    socket.emit('tiktok-status', { status: 'disconnected' });
   });
 
   // 占い開始要求
@@ -479,14 +517,7 @@ io.on('connection', (socket: any) => {
 
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
-    if (activeConnections.has(socket.id)) {
-      try {
-        activeConnections.get(socket.id)?.disconnect();
-        activeConnections.delete(socket.id);
-      } catch (err) {
-        console.error('Error disconnecting on socket connection loss:', err);
-      }
-    }
+    closeTikTok(socket.id);
   });
 });
 
