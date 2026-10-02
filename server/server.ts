@@ -65,6 +65,7 @@ function normalizeUsername(input: unknown): string {
 function connectionError(error: any): string {
   const detail = error?.message || error?.exception?.message || String(error);
   if (/offline|not live/i.test(detail)) return 'このアカウントは現在LIVE中ではありません。ユーザーIDと配信状況を確認してください。';
+  if (/business plan|premium|purchase/i.test(detail)) return '署名サービスの有料機能が要求されました。サーバーの接続設定を確認してください。';
   if (/sign|euler|429|rate.?limit|api.?key/i.test(detail)) {
     return 'TikTok接続用の署名サービスでエラーが発生しました。サーバーのEULER_STREAM_API_KEY設定や利用制限を確認してください。';
   }
@@ -276,7 +277,7 @@ io.on('connection', (socket: any) => {
       username = normalizeUsername(username);
       const tiktokConnect = new TikTokLiveConnection(username, {
         signApiKey: process.env.EULER_STREAM_API_KEY || undefined,
-        enableExtendedGiftInfo: true
+        enableExtendedGiftInfo: false
       }) as TikTokLiveConnection & EventEmitter;
       // Connector 2.5's typed-emitter declarations omit inherited methods under NodeNext.
       activeConnections.set(socket.id, tiktokConnect);
@@ -309,9 +310,10 @@ io.on('connection', (socket: any) => {
 
       // チャットイベントの監視
       tiktokConnect.on('chat', (data: any) => {
-        const comment = data.comment;
-        const nickname = data.user?.nickname || data.user?.uniqueId;
-        const uniqueId = data.user?.uniqueId;
+        const comment = data.content || data.comment || '';
+        if (!comment) return;
+        const nickname = data.user?.nickname || data.user?.uniqueId || data.user?.displayId || data.user?.idStr;
+        const uniqueId = data.user?.uniqueId || data.user?.displayId || data.user?.idStr;
         const profilePictureUrl = data.user?.avatarThumb?.urlList?.[0];
 
         // 全コメントをログとして流す
@@ -343,8 +345,8 @@ io.on('connection', (socket: any) => {
 
       // ギフトイベントの監視
       tiktokConnect.on('gift', (data: any) => {
-        const nickname = data.user?.nickname || data.user?.uniqueId;
-        const uniqueId = data.user?.uniqueId;
+        const nickname = data.user?.nickname || data.user?.uniqueId || data.user?.displayId || data.user?.idStr;
+        const uniqueId = data.user?.uniqueId || data.user?.displayId || data.user?.idStr;
         const profilePictureUrl = data.user?.avatarThumb?.urlList?.[0];
         const giftName = data.extendedGiftInfo?.name || data.gift?.name || `ギフト ${data.giftId}`;
         const diamondCount = data.extendedGiftInfo?.diamondCount || data.gift?.diamondCount || 0;

@@ -236,7 +236,7 @@ export default function App() {
 
   // サーバー接続設定
   const [apiUrl, setApiUrl] = useState(() => {
-    return localStorage.getItem('fortune_api_url') || import.meta.env.VITE_API_URL || 'https://tiktok-live-tool-server.onrender.com'
+    return localStorage.getItem('fortune_api_url') || import.meta.env.VITE_API_URL || 'https://tiktoklivetool.onrender.com'
   })
   const [tempApiUrl, setTempApiUrl] = useState(apiUrl)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -1866,7 +1866,7 @@ ${res.advice}
                 <Input 
                   value={tempApiUrl}
                   onChange={(e) => setTempApiUrl(e.target.value)}
-                  placeholder="https://tiktok-live-tool-server.onrender.com"
+                  placeholder="https://tiktoklivetool.onrender.com"
                   className="h-8 text-xs bg-beige-50/50 font-mono"
                 />
                 <p className="text-[10px] text-sage-500">

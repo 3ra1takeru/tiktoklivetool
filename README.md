@@ -20,7 +20,7 @@ TikTokの表示名ではなく、プロフィールの`@ユーザーID`を入力
 
 ## 公開サーバーの復旧
 
-2026年10月2日の確認では、画面の標準URL `https://tiktok-live-tool-server.onrender.com`は404を返し、`x-render-routing: no-server`でした。別のサーバーURLを設定している場合は、そのサーバーも確認してください。
+2026年10月2日の確認では、旧標準URL `https://tiktok-live-tool-server.onrender.com`は404でした。実際に使用中の `https://tiktoklivetool.onrender.com` は正常稼働していますが、旧サーバーでは`okawa_ai`へのLIVE接続が失敗しました。更新したConnector 2.5.0では同アカウントへの接続に成功しました。画面の標準URLを実際のサーバーURLに修正しています。
 
 1. RenderでこのGitHubリポジトリからWeb Serviceを作成または復旧します。`render.yaml`が設定のひな型です。
 2. Root Directory: `server`、Build: `npm ci && npm run build`、Start: `npm start`。Node.js 22を使用します。
@@ -39,3 +39,9 @@ node tests/connection-smoke.mjs
 ```
 
 このテストはHTTP・Socket.IO・入力エラー・切断・模擬コメントを確認します。実際のTikTok接続成功の検証には配信中のアカウントが必要です。
+
+```sh
+node tests/live-connection.mjs https://www.tiktok.com/@okawa_ai/live
+```
+
+2026年10月2日、修正版サーバー経由で`okawa_ai`への接続と実際のコメント受信（本文・表示名・ユーザーID）に成功しました。ギフト一覧の事前取得は署名サービスのBusinessプランを要求したため無効にしています。ギフトイベント本体の名前・ダイヤ数を使用します。実際のギフト受信は未検証です。
