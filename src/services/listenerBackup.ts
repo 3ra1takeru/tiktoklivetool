@@ -1,4 +1,4 @@
-import type { RegularUser } from '../App'
+import type { RegularUser } from './listenerTypes'
 
 export function mergeListener(existing: RegularUser | undefined, incoming: RegularUser): RegularUser {
   const records = [...(existing?.birthdates || []), ...(incoming.birthdates || [])]

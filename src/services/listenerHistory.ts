@@ -1,3 +1,4 @@
+import { cloudConfigured, saveCloudChat, getCloudChats } from './cloudStorage'
 export interface ListenerChat {
   id: string
   userId: string
@@ -19,6 +20,7 @@ function openDatabase() {
   })
 }
 export async function saveListenerChat(message: ListenerChat) {
+  if (cloudConfigured()) return saveCloudChat(message)
   const db = await openDatabase()
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction('messages', 'readwrite')
@@ -29,6 +31,7 @@ export async function saveListenerChat(message: ListenerChat) {
   })
 }
 export async function getListenerChats(userId: string): Promise<ListenerChat[]> {
+  if (cloudConfigured()) return getCloudChats(userId)
   const db = await openDatabase()
   return new Promise((resolve, reject) => {
     const request = db.transaction('messages').objectStore('messages').index('userId').getAll(userId)
