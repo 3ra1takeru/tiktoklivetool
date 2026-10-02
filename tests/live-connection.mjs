@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process';
 import { io } from 'socket.io-client';
 const username = process.argv[2];
 if (!username) throw new Error('Usage: node tests/live-connection.mjs <LIVE username or URL>');
-const server = spawn(process.execPath, ['dist/server.js'], {cwd:'server', env:{...process.env,PORT:'5003'},stdio:['ignore','pipe','pipe']});
+const args = process.argv.includes('--force-room-fallback') ? ['--import', new URL('./force-room-lookup-failure.mjs', import.meta.url).pathname, 'dist/server.js'] : ['dist/server.js'];
+const server = spawn(process.execPath, args, {cwd:'server', env:{...process.env,PORT:'5003'},stdio:['ignore','pipe','pipe']});
 let socket;
 try {
   await new Promise((resolve,reject)=>{server.stdout.once('data',resolve);server.once('error',reject);});
