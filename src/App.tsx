@@ -1,5 +1,6 @@
+import { removeEmoji } from './services/tts'
 import { saveListenerChat, getListenerChats, type ListenerChat } from './services/listenerHistory'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { 
   Sparkles, 
@@ -275,7 +276,9 @@ export default function App() {
   })
 
   // 読み上げ用の音声トリガーキュー
-  const [ttsSpeechTrigger, setTtsSpeechTrigger] = useState<TtsSpeechItem | null>(null)
+  const [ttsSpeechQueue, setTtsSpeechQueue] = useState<TtsSpeechItem[]>([])
+  const setTtsSpeechTrigger = (item: TtsSpeechItem) => setTtsSpeechQueue(queue => [...queue, item])
+  const activeSpeechRef = useRef(new Set<SpeechSynthesisUtterance>())
 
   // スクロール自動追従用の参照
   const chatEndRef = useRef<HTMLDivElement>(null)
@@ -360,36 +363,37 @@ export default function App() {
     }
   }, [selectedVoiceURI])
 
-  // 音声読み上げ用絵文字クリーンアップ ＆ 12文字トリミング
-  const cleanTtsName = (name: string): string => {
-    return name
-      .replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]/g, '')
-      .replace(/\p{Emoji}/gu, '')
-      .replace(/\p{Extended_Pictographic}/gu, '')
-      .replace(/\s+/g, '')
-      .trim()
-  }
-
-  // 音声読み上げコア処理
-  const speakText = (text: string) => {
+  const speakText = useCallback((text: string) => {
     if (!('speechSynthesis' in window)) return
-    window.speechSynthesis.cancel()
-
-    const utterance = new SpeechSynthesisUtterance(text)
+    const cleaned = removeEmoji(text)
+    if (!cleaned) return
+    const utterance = new SpeechSynthesisUtterance(cleaned)
     utterance.lang = 'ja-JP'
     utterance.rate = ttsRate
     utterance.pitch = ttsPitch
     utterance.volume = ttsVolume
-
-    if (selectedVoiceURI && availableVoices.length > 0) {
-      const voice = availableVoices.find(v => (v.voiceURI || v.name) === selectedVoiceURI)
-      if (voice) {
-        utterance.voice = voice
-      }
-    }
-
+    const voice = availableVoices.find(v => (v.voiceURI || v.name) === selectedVoiceURI)
+    if (voice) utterance.voice = voice
+    activeSpeechRef.current.add(utterance)
+    const release = () => activeSpeechRef.current.delete(utterance)
+    utterance.onend = release
+    utterance.onerror = release
+    // speechSynthesis keeps utterances in FIFO order until each one finishes.
     window.speechSynthesis.speak(utterance)
-  }
+  }, [ttsRate, ttsPitch, ttsVolume, availableVoices, selectedVoiceURI])
+
+  useEffect(() => {
+    if (!isTtsEnabled && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+      activeSpeechRef.current.clear()
+      setTtsSpeechQueue([])
+    }
+  }, [isTtsEnabled])
+
+  useEffect(() => () => {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    activeSpeechRef.current.clear()
+  }, [])
 
   // 設定画面でのテスト読み上げ
   const handleTestSpeech = () => {
@@ -398,27 +402,30 @@ export default function App() {
 
   // 読み上げトリガーキューの監視
   useEffect(() => {
-    if (!ttsSpeechTrigger || !isTtsEnabled) return
-
-    const { username, comment, hasBirth, isRegular, isGift, giftName } = ttsSpeechTrigger
-    const displayName = cleanTtsName(username).slice(0, 12) || 'ゲスト'
+    if (!ttsSpeechQueue.length) return
+    setTtsSpeechQueue([])
+    if (!isTtsEnabled) return
+    for (const item of ttsSpeechQueue) {
+      const { username, comment, hasBirth, isRegular, isGift, giftName } = item
+      const displayName = removeEmoji(username).slice(0, 12) || 'ゲスト'
     
-    let text = ''
-    if (isGift) {
-      text = `${displayName}さんから、ギフト「${giftName}」を頂きました！`
-    } else {
-      if (ttsMode === 'all') {
-        text = `${displayName}さん。「${comment}」`
-      } else if (ttsMode === 'fortune' && (hasBirth || isRegular)) {
-        const regularText = isRegular ? '常連の' : ''
-        text = `${regularText}${displayName}さんから、占い依頼が入りました。「${comment}」`
+      let text = ''
+      if (isGift) {
+        text = `${displayName}さんから、ギフト「${giftName}」を頂きました！`
+      } else {
+        if (ttsMode === 'all') {
+          text = `${displayName}さん。「${comment}」`
+        } else if (ttsMode === 'fortune' && (hasBirth || isRegular)) {
+          const regularText = isRegular ? '常連の' : ''
+          text = `${regularText}${displayName}さんから、占い依頼が入りました。「${comment}」`
+        }
+      }
+
+      if (text) {
+        speakText(text)
       }
     }
-
-    if (text) {
-      speakText(text)
-    }
-  }, [ttsSpeechTrigger])
+  }, [ttsSpeechQueue, isTtsEnabled, ttsMode, speakText])
 
   // 共通のチャット受信処理（Socket.io受信、手動入力、模擬データの統一処理）
   const processIncomingChat = (msg: {
