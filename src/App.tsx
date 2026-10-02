@@ -1,3 +1,4 @@
+import { registeredBirthdate } from './services/registeredBirthdate'
 import { ListenerManager } from './components/ListenerManager'
 import { removeEmoji } from './services/tts'
 import { saveListenerChat, getListenerChats, type ListenerChat } from './services/listenerHistory'
@@ -232,7 +233,7 @@ export default function App() {
   const [regulars, setRegulars] = useState<Record<string, RegularUser>>(() => {
     try {
       const saved = localStorage.getItem('star_campe_regulars')
-      return saved ? JSON.parse(saved) : {}
+      return saved ? Object.fromEntries(Object.entries(JSON.parse(saved) as Record<string, RegularUser>).map(([id, user]) => [id, { ...user, birthdate: registeredBirthdate(user) }])) : {}
     } catch { return {} }
   })
 
@@ -468,10 +469,10 @@ export default function App() {
     if (!hasBirth) {
       setRegulars(prevRegs => {
         const regular = prevRegs[msg.userId]
-        if (regular && regular.birthdate) {
+        if (regular && registeredBirthdate(regular)) {
           isRegularMatch = true
 
-          let combinedBirth = regular.birthdate
+          let combinedBirth = registeredBirthdate(regular)
           if (regular.birthdates && regular.birthdates.length > 0) {
             combinedBirth = regular.birthdates
               .map(b => {
@@ -653,9 +654,9 @@ export default function App() {
         const nextRegs = { ...prevRegs, [gift.userId]: user }
         localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
 
-        if (user.birthdate) {
+        if (registeredBirthdate(user)) {
           isRegularMatch = true
-          let combinedBirth = user.birthdate
+          let combinedBirth = registeredBirthdate(user)
           if (user.birthdates && user.birthdates.length > 0) {
             combinedBirth = user.birthdates
               .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
@@ -755,7 +756,7 @@ export default function App() {
     const user = regulars[log.userId]
     const birthdate = user?.birthdates?.length
       ? user.birthdates.map(b => `${b.relationship}[${b.gender === 'male' ? '男性' : b.gender === 'female' ? '女性' : '未指定'}]: ${b.birthdate}`).join('\n')
-      : user?.birthdate || extractBirthDate(log.comment)
+      : registeredBirthdate(user) || extractBirthDate(log.comment)
     if (!birthdate) {
       setSystemAlert('このリスナーの生年月日が未登録です。チャットに生年月日を入力してから占ってください。')
       return
@@ -968,7 +969,7 @@ export default function App() {
         const user = prevRegs[matchedUserId]
         user.totalPayPay += amountNum
 
-        let combinedBirth = user.birthdate
+        let combinedBirth = registeredBirthdate(user)
         if (user.birthdates && user.birthdates.length > 0) {
           combinedBirth = user.birthdates
             .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
@@ -1029,8 +1030,8 @@ export default function App() {
   // ギフト・決済履歴から鑑定待ちに追加
   const handleAddRequestFromTx = (tx: TransactionItem) => {
     const regular = regulars[tx.userId]
-    if (regular && regular.birthdate) {
-      let combinedBirth = regular.birthdate
+    if (regular && registeredBirthdate(regular)) {
+      let combinedBirth = registeredBirthdate(regular)
       if (regular.birthdates && regular.birthdates.length > 0) {
         combinedBirth = regular.birthdates
           .map(b => `${b.relationship}${b.name ? `(${b.name})` : ''}: ${b.birthdate}`)
@@ -1450,7 +1451,7 @@ ${res.advice}
                             <span className="font-bold text-sage-900 truncate flex items-center gap-1">
                               <button onClick={() => void openListenerHistory(log.userId)} title="リスナーの履歴を表示" className="truncate underline">{log.username}</button>
                               <Button size="sm" className="h-6 px-2 text-[10px]" onClick={() => tellChatFortune(log)}>占う</Button>
-                              {regulars[log.userId]?.birthdate && (
+                              {registeredBirthdate(regulars[log.userId]) && (
                                 <Badge variant="outline" className="text-[9px] px-1 py-0 border-gold-400 bg-gold-50 text-gold-800">
                                   常連
                                 </Badge>

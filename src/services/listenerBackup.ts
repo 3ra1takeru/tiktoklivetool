@@ -1,3 +1,4 @@
+import { registeredBirthdate } from './registeredBirthdate.ts'
 import type { RegularUser } from '../App'
 
 export function mergeListener(existing: RegularUser | undefined, incoming: RegularUser): RegularUser {
@@ -11,7 +12,7 @@ export function mergeListener(existing: RegularUser | undefined, incoming: Regul
   const history = [...(existing?.history || []), ...incoming.history].filter((item, index, all) => all.findIndex(other => other.timestamp === item.timestamp && other.birthdate === item.birthdate) === index).sort((a, b) => b.timestamp - a.timestamp)
   return {
     ...incoming, ...existing,
-    birthdate: existing?.birthdate || incoming.birthdate,
+    birthdate: registeredBirthdate(existing) || registeredBirthdate(incoming),
     birthdates, history,
     totalDiamonds: Math.max(existing?.totalDiamonds || 0, incoming.totalDiamonds),
     totalPayPay: Math.max(existing?.totalPayPay || 0, incoming.totalPayPay)
