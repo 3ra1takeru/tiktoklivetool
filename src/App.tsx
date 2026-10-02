@@ -1,3 +1,4 @@
+import { saveListenerChat, getListenerChats, type ListenerChat } from './services/listenerHistory'
 import { useEffect, useState, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { 
@@ -191,7 +192,15 @@ export default function App() {
   const [tempGeminiApiKey, setTempGeminiApiKey] = useState(geminiApiKey)
 
   // 接続設定
-  const [tiktokUsername, setTiktokUsername] = useState('')
+  const [tiktokUsername, setTiktokUsername] = useState(() => localStorage.getItem('fortune_broadcaster') || '')
+  const [savedBroadcaster, setSavedBroadcaster] = useState(tiktokUsername)
+  const [tempBroadcaster, setTempBroadcaster] = useState(tiktokUsername)
+  const [autoConnect, setAutoConnect] = useState(() => localStorage.getItem('fortune_auto_connect') === 'true')
+  const [tempAutoConnect, setTempAutoConnect] = useState(autoConnect)
+  const [autoPaused, setAutoPaused] = useState(false)
+  const [historyUser, setHistoryUser] = useState<string | null>(null)
+  const [storedChats, setStoredChats] = useState<ListenerChat[]>([])
+  const [historyLimit, setHistoryLimit] = useState(50)
   const [serverConnected, setServerConnected] = useState(false)
   const [tiktokConnected, setTiktokConnected] = useState<'connected' | 'disconnected' | 'connecting' | 'error'>('disconnected')
   const [errorMessage, setErrorMessage] = useState('')
@@ -218,8 +227,10 @@ export default function App() {
   
   // 常連データ（LocalStorage）
   const [regulars, setRegulars] = useState<Record<string, RegularUser>>(() => {
-    const saved = localStorage.getItem('star_campe_regulars')
-    return saved ? JSON.parse(saved) : {}
+    try {
+      const saved = localStorage.getItem('star_campe_regulars')
+      return saved ? JSON.parse(saved) : {}
+    } catch { return {} }
   })
 
   // PayPay手動追加用
@@ -270,6 +281,13 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement>(null)
 
   const handleSaveSettings = () => {
+    const broadcaster = tempBroadcaster.trim().replace(/^@/, '')
+    localStorage.setItem('fortune_broadcaster', broadcaster)
+    localStorage.setItem('fortune_auto_connect', String(tempAutoConnect))
+    setAutoConnect(tempAutoConnect)
+    setSavedBroadcaster(broadcaster)
+    setTiktokUsername(broadcaster)
+    setAutoPaused(false)
     const cleanUrl = tempApiUrl.trim().replace(/\/$/, '')
     localStorage.setItem('fortune_api_url', cleanUrl)
     setApiUrl(cleanUrl)
@@ -411,6 +429,16 @@ export default function App() {
     profilePictureUrl?: string
     timestamp: number
   }) => {
+    void saveListenerChat(msg).catch(() => setSystemAlert('チャット履歴を保存できませんでした。ブラウザーの保存容量・設定を確認してください。'))
+    setRegulars(previous => {
+      const user = previous[msg.userId]
+      const next = { ...previous, [msg.userId]: user
+        ? { ...user, username: msg.username, profilePictureUrl: msg.profilePictureUrl || user.profilePictureUrl }
+        : { userId: msg.userId, username: msg.username, profilePictureUrl: msg.profilePictureUrl, birthdate: '', birthdates: [], history: [], totalDiamonds: 0, totalPayPay: 0 } }
+      try { localStorage.setItem('star_campe_regulars', JSON.stringify(next)) }
+      catch { setSystemAlert('リスナー情報を保存できませんでした。ブラウザーの保存容量を確認してください。') }
+      return next
+    })
     const extractedBirth = extractBirthDate(msg.comment)
     const hasBirth = !!extractedBirth
 
@@ -520,6 +548,7 @@ export default function App() {
               gender: detectedGender
             }
             user.birthdates = [...birthdatesList, newRecord]
+            if (!user.birthdate) user.birthdate = extractedBirth!
             const nextRegs = { ...prevRegs, [msg.userId]: user }
             localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
             return nextRegs
@@ -693,8 +722,45 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chatLogs])
 
+  useEffect(() => {
+    if (!autoConnect || autoPaused || !savedBroadcaster || !serverConnected || !socket) return
+    if (tiktokConnected === 'connected' || tiktokConnected === 'connecting') return
+    const timer = window.setTimeout(() => {
+      setTiktokUsername(savedBroadcaster)
+      setTiktokConnected('connecting')
+      setErrorMessage('')
+      socket.emit('join-tiktok', savedBroadcaster)
+    }, tiktokConnected === 'disconnected' ? 1000 : 60000)
+    return () => window.clearTimeout(timer)
+  }, [autoConnect, autoPaused, savedBroadcaster, serverConnected, socket, tiktokConnected])
+
+  const openListenerHistory = async (userId: string) => {
+    setHistoryUser(userId)
+    setHistoryLimit(50)
+    setStoredChats([])
+    try { setStoredChats(await getListenerChats(userId)) }
+    catch { setSystemAlert('チャット履歴を読み込めませんでした。') }
+  }
+
+  const tellChatFortune = (log: ListenerChat) => {
+    const user = regulars[log.userId]
+    const birthdate = user?.birthdates?.length
+      ? user.birthdates.map(b => `${b.relationship}[${b.gender === 'male' ? '男性' : b.gender === 'female' ? '女性' : '未指定'}]: ${b.birthdate}`).join('\n')
+      : user?.birthdate || extractBirthDate(log.comment)
+    if (!birthdate) {
+      setSystemAlert('このリスナーの生年月日が未登録です。チャットに生年月日を入力してから占ってください。')
+      return
+    }
+    if (fortuneRequests.some(r => r.userId === log.userId && r.status === 'loading')) return
+    const request: FortuneRequest = { ...log, id: crypto.randomUUID(), birthdate, status: 'pending', timestamp: Date.now(), fortuneQuestion: log.comment }
+    setFortuneRequests(previous => [...previous, request])
+    setSelectedRequestId(request.id)
+    void handleStartFortune(request)
+  }
+
   // TikTok Liveへの接続処理
   const handleConnectTiktok = () => {
+    setAutoPaused(false)
     if (!socket?.connected || !tiktokUsername.trim()) return
     setTiktokConnected('connecting')
     setErrorMessage('')
@@ -703,6 +769,7 @@ export default function App() {
 
   // TikTok Liveからの切断処理
   const handleDisconnectTiktok = () => {
+    setAutoPaused(true)
     if (!socket) return
     socket.emit('leave-tiktok')
   }
@@ -763,10 +830,10 @@ export default function App() {
 
   // 鑑定開始処理（サーバー接続 / クライアントAI の両対応）
   const handleStartFortune = async (req: FortuneRequest) => {
-    const chatHistory = chatLogs
-      .filter(log => log.userId === req.userId)
-      .map(log => log.comment)
-      .slice(-5)
+    let previousChats: ListenerChat[] = chatLogs.filter(log => log.userId === req.userId)
+    try { previousChats = await getListenerChats(req.userId) }
+    catch { /* 保存が使えない場合は現在のチャットで鑑定する */ }
+    const chatHistory = previousChats.slice(-20).map(log => log.comment)
 
     let birthdateParam = req.birthdate
     if (!birthdateParam.includes('[')) {
@@ -1258,7 +1325,7 @@ ${res.advice}
             variant="outline" 
             size="icon" 
             className="h-9 w-9 border-beige-200 hover:bg-beige-100 shrink-0" 
-            onClick={() => setIsSettingsOpen(true)}
+            onClick={() => { setTempBroadcaster(savedBroadcaster); setTempAutoConnect(autoConnect); setIsSettingsOpen(true) }}
             title="システム設定"
           >
             <Settings className="w-4 h-4 text-sage-700" />
@@ -1371,8 +1438,9 @@ ${res.advice}
                         >
                           <div className="flex items-center justify-between gap-1 mb-1">
                             <span className="font-bold text-sage-900 truncate flex items-center gap-1">
-                              {log.username}
-                              {regulars[log.userId] && (
+                              <button onClick={() => void openListenerHistory(log.userId)} title="リスナーの履歴を表示" className="truncate underline">{log.username}</button>
+                              <Button size="sm" className="h-6 px-2 text-[10px]" onClick={() => tellChatFortune(log)}>占う</Button>
+                              {regulars[log.userId]?.birthdate && (
                                 <Badge variant="outline" className="text-[9px] px-1 py-0 border-gold-400 bg-gold-50 text-gold-800">
                                   常連
                                 </Badge>
@@ -1846,9 +1914,25 @@ ${res.advice}
       </div>
 
       {/* 設定ダイアログモーダル */}
+      {historyUser !== null && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <Card className="w-full max-w-xl max-h-[90vh] overflow-y-auto bg-white">
+            <CardHeader><CardTitle>リスナー履歴 {historyUser && (regulars[historyUser]?.username || historyUser)}</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              {historyUser === '' ? Object.values(regulars).map(user => <button className="block underline" key={user.userId} onClick={() => void openListenerHistory(user.userId)}>{user.username}（@{user.userId}）</button>) : <>
+                <p className="text-sm whitespace-pre-line">{regulars[historyUser]?.birthdates?.map(b => `${b.relationship} ${b.name}: ${b.birthdate}`).join('\n') || regulars[historyUser]?.birthdate || '生年月日未登録'}</p>
+                <p className="text-xs">保存済みチャット：{storedChats.length}件</p>
+                {storedChats.slice(-historyLimit).reverse().map(log => <div key={log.id} className="border-b py-2 text-sm"><time className="text-xs text-sage-500">{new Date(log.timestamp).toLocaleString()}</time><p className="break-words">{log.comment}</p></div>)}
+                {storedChats.length > historyLimit && <Button size="sm" onClick={() => setHistoryLimit(n => n + 50)}>さらに50件表示</Button>}
+              </>}
+            </CardContent>
+            <CardFooter className="gap-2"><Button onClick={() => setHistoryUser(null)}>閉じる</Button>{historyUser && <Button onClick={() => setHistoryUser('')}>リスナー一覧</Button>}</CardFooter>
+          </Card>
+        </div>
+      )}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
-          <Card className="w-full max-w-md bg-white border-beige-300 shadow-xl">
+          <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-white border-beige-300 shadow-xl">
             <CardHeader>
               <CardTitle className="text-lg font-bold text-sage-900 flex items-center gap-2">
                 <Settings className="w-5 h-5 text-gold-600" />
@@ -1860,6 +1944,13 @@ ${res.advice}
             </CardHeader>
             <CardContent className="space-y-4 text-xs">
 
+              <div className="space-y-2">
+                <label htmlFor="broadcaster" className="font-bold">配信者のユーザーID</label>
+                <Input id="broadcaster" value={tempBroadcaster} onChange={e => setTempBroadcaster(e.target.value)} placeholder="@near.future.boy" />
+                <label className="flex items-center gap-2"><input type="checkbox" checked={tempAutoConnect} onChange={e => setTempAutoConnect(e.target.checked)} />LIVE開始時に自動接続する</label>
+                <p className="text-sage-500">サイトを開いている間、未接続時は約1分ごとに接続を試みます。接続するとコメントを自動保存します。履歴はこのブラウザーに保存されます。</p>
+                <Button size="sm" onClick={() => { setIsSettingsOpen(false); setHistoryUser(''); setStoredChats([]) }}>保存済みのリスナー履歴</Button>
+              </div>
               {/* サーバーURL設定 */}
               <div className="space-y-1.5">
                 <label className="font-bold text-sage-800">サーバー接続URL (Socket.io)</label>
