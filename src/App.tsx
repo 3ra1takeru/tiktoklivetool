@@ -1,3 +1,4 @@
+import { ListenerManager } from './components/ListenerManager'
 import { removeEmoji } from './services/tts'
 import { saveListenerChat, getListenerChats, type ListenerChat } from './services/listenerHistory'
 import { useEffect, useState, useRef, useCallback } from 'react'
@@ -65,7 +66,7 @@ interface FortuneHistoryItem {
   summary: string
 }
 
-interface BirthdateRecord {
+export interface BirthdateRecord {
   id: string
   birthdate: string
   name: string
@@ -73,7 +74,7 @@ interface BirthdateRecord {
   gender?: 'male' | 'female' | 'unspecified'
 }
 
-interface RegularUser {
+export interface RegularUser {
   userId: string
   username: string
   profilePictureUrl?: string
@@ -199,6 +200,7 @@ export default function App() {
   const [autoConnect, setAutoConnect] = useState(() => localStorage.getItem('fortune_auto_connect') === 'true')
   const [tempAutoConnect, setTempAutoConnect] = useState(autoConnect)
   const [autoPaused, setAutoPaused] = useState(false)
+  const [managerOpen, setManagerOpen] = useState(false)
   const [historyUser, setHistoryUser] = useState<string | null>(null)
   const [storedChats, setStoredChats] = useState<ListenerChat[]>([])
   const [historyLimit, setHistoryLimit] = useState(50)
@@ -819,7 +821,7 @@ export default function App() {
           comment: req.comment,
           summary: result.summary
         })
-        if (user.history.length > 5) user.history.pop()
+
       }
 
       if (!user.birthdate) {
@@ -1328,6 +1330,7 @@ ${res.advice}
             </Button>
           </div>
 
+          <Button variant="outline" size="sm" onClick={() => setManagerOpen(true)}>リスナー管理</Button>
           <Button 
             variant="outline" 
             size="icon" 
@@ -1921,6 +1924,13 @@ ${res.advice}
       </div>
 
       {/* 設定ダイアログモーダル */}
+      {managerOpen && <ListenerManager users={regulars} onClose={() => setManagerOpen(false)} onSave={user => {
+        // Write synchronously so the manager only reports success after persistence succeeds.
+        const stored = JSON.parse(localStorage.getItem('star_campe_regulars') || '{}')
+        const next = { ...stored, [user.userId]: user }
+        localStorage.setItem('star_campe_regulars', JSON.stringify(next))
+        setRegulars(previous => ({ ...previous, [user.userId]: user }))
+      }} />}
       {historyUser !== null && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <Card className="w-full max-w-xl max-h-[90vh] overflow-y-auto bg-white">
@@ -1956,7 +1966,7 @@ ${res.advice}
                 <Input id="broadcaster" value={tempBroadcaster} onChange={e => setTempBroadcaster(e.target.value)} placeholder="@near.future.boy" />
                 <label className="flex items-center gap-2"><input type="checkbox" checked={tempAutoConnect} onChange={e => setTempAutoConnect(e.target.checked)} />LIVE開始時に自動接続する</label>
                 <p className="text-sage-500">サイトを開いている間、未接続時は約1分ごとに接続を試みます。接続するとコメントを自動保存します。履歴はこのブラウザーに保存されます。</p>
-                <Button size="sm" onClick={() => { setIsSettingsOpen(false); setHistoryUser(''); setStoredChats([]) }}>保存済みのリスナー履歴</Button>
+                <Button size="sm" onClick={() => { setIsSettingsOpen(false); setManagerOpen(true) }}>保存済みのリスナー履歴</Button>
               </div>
               {/* サーバーURL設定 */}
               <div className="space-y-1.5">
