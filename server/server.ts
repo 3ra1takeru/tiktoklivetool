@@ -64,6 +64,7 @@ function normalizeUsername(input: unknown): string {
 
 function connectionError(error: any): string {
   const detail = error?.message || error?.exception?.message || String(error);
+  if (/retrieve Room ID|SIGI_STATE/i.test(detail)) return 'TikTokの配信情報を取得できませんでした。しばらく待って再接続してください。';
   if (/offline|not live/i.test(detail)) return 'このアカウントは現在LIVE中ではありません。ユーザーIDと配信状況を確認してください。';
   if (/business plan|premium|purchase/i.test(detail)) return '署名サービスの有料機能が要求されました。サーバーの接続設定を確認してください。';
   if (/sign|euler|429|rate.?limit|api.?key/i.test(detail)) {
@@ -281,6 +282,7 @@ io.on('connection', (socket: any) => {
       }) as TikTokLiveConnection & EventEmitter;
       // Connector 2.5's typed-emitter declarations omit inherited methods under NodeNext.
       activeConnections.set(socket.id, tiktokConnect);
+      let connecting = true;
       const isCurrent = () => socket.connected && activeConnections.get(socket.id) === tiktokConnect;
       const timeout = setTimeout(() => {
         if (!isCurrent()) return;
@@ -290,11 +292,31 @@ io.on('connection', (socket: any) => {
       const emit = socket.emit.bind(socket);
       // 古い接続から遅れて届いたイベントを新しい接続へ混ぜない
       const emitCurrent = (event: string, data: any) => { if (isCurrent()) emit(event, data); };
-      tiktokConnect.connect().then((state: any) => {
+      const connect = async () => {
+        try {
+          return await tiktokConnect.connect();
+        } catch (error: any) {
+          if (!isCurrent() || !/retrieve Room ID|SIGI_STATE/i.test(error?.message || '')) throw error;
+          console.log(`[TikTok] Trying Vercel room lookup for ${username}`);
+          const lookupUrl = new URL('/api/tiktok-room', 'https://tiktoklivetool.vercel.app');
+          lookupUrl.searchParams.set('username', username);
+          const response = await fetch(lookupUrl, { signal: AbortSignal.timeout(18000) });
+          if (!response.ok) throw error;
+          const data = await response.json() as { username?: string; roomId?: string };
+          if (data.username !== username || typeof data.roomId !== 'string' || !/^[1-9]\d{15,21}$/.test(data.roomId)) throw error;
+          if (!isCurrent()) throw error;
+          // The cloud HTML/API lookup failed. The signer checks the supplied live room.
+          tiktokConnect.options.fetchRoomInfoOnConnect = false;
+          return await tiktokConnect.connect(data.roomId);
+        }
+      };
+      connect().then((state: any) => {
+        connecting = false;
         clearTimeout(timeout);
         if (!isCurrent()) { void tiktokConnect.disconnect().catch(() => {}); return; }
         emitCurrent('tiktok-status', { status: 'connected', username, roomId: state.roomId });
       }).catch((err: any) => {
+        connecting = false;
         clearTimeout(timeout);
         console.error(`Failed to connect to TikTok Live for ${username}:`, err);
         if (!isCurrent()) return;
@@ -302,6 +324,7 @@ io.on('connection', (socket: any) => {
         closeTikTok(socket.id);
       });
       tiktokConnect.on('disconnected', () => {
+        if (connecting) return;
         clearTimeout(timeout);
         if (!isCurrent()) return;
         emitCurrent('tiktok-status', { status: 'disconnected' });
@@ -369,7 +392,7 @@ io.on('connection', (socket: any) => {
       // エラーイベントの監視
       tiktokConnect.on('error', (err: any) => {
         console.error(`TikTok Live error for ${username}:`, err);
-        emitCurrent('tiktok-status', { status: 'error', error: connectionError(err) });
+        if (!connecting) emitCurrent('tiktok-status', { status: 'error', error: connectionError(err) });
       });
 
       // 配信終了イベントの監視

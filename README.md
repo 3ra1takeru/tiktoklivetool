@@ -45,3 +45,13 @@ node tests/live-connection.mjs https://www.tiktok.com/@okawa_ai/live
 ```
 
 2026年10月2日、修正版サーバー経由で`okawa_ai`への接続と実際のコメント受信（本文・表示名・ユーザーID）に成功しました。ギフト一覧の事前取得は署名サービスのBusinessプランを要求したため無効にしています。ギフトイベント本体の名前・ダイヤ数を使用します。実際のギフト受信は未検証です。
+
+## RenderでルームID取得に失敗する場合
+
+通常のTikTok取得経路に失敗した場合のみ、Vercelの`/api/tiktok-room`で配信ルームIDを取得し、署名サービス経由で接続します。補助APIはTikTokの固定URLのみ参照し、ユーザーIDとルームIDの形式を検証します。TikTokの応答本文や認証情報は公開しません。RenderとVercel双方のデプロイが必要です。
+
+```sh
+node tests/live-connection.mjs https://www.tiktok.com/@okawa_ai/live --force-room-fallback
+```
+
+このテストはRenderでのルームID取得失敗を再現し、公開Vercelの補助API経由で実際のLIVE接続とコメント受信を検証します。配信中のアカウントが必要です。
