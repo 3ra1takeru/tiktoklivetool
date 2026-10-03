@@ -1,3 +1,4 @@
+import { completedGift } from './giftEvents.js';
 import express from 'express';
 import { createServer } from 'http';
 import { EventEmitter } from 'node:events';
@@ -368,17 +369,19 @@ io.on('connection', (socket: any) => {
 
       // ギフトイベントの監視
       tiktokConnect.on('gift', (data: any) => {
+        const completed = completedGift(data);
+        if (!completed) return;
         const nickname = data.user?.nickname || data.user?.uniqueId || data.user?.displayId || data.user?.idStr;
         const uniqueId = data.user?.uniqueId || data.user?.displayId || data.user?.idStr;
         const profilePictureUrl = data.user?.avatarThumb?.urlList?.[0];
-        const giftName = data.extendedGiftInfo?.name || data.gift?.name || `ギフト ${data.giftId}`;
-        const diamondCount = data.extendedGiftInfo?.diamondCount || data.gift?.diamondCount || 0;
-        const repeatCount = data.repeatCount || 1;
+        const giftName = data.giftDetails?.name || data.extendedGiftInfo?.name || data.gift?.name || `ギフト ${data.giftId}`;
+        const diamondCount = data.giftDetails?.diamondCount || data.extendedGiftInfo?.diamondCount || data.gift?.diamondCount || 0;
+        const repeatCount = completed.count;
 
         console.log(`Received gift: ${giftName} x${repeatCount} from ${nickname} (Diamonds: ${diamondCount})`);
 
         emitCurrent('gift-log', {
-          id: data.common?.msgId || Math.random().toString(),
+          id: completed.id,
           username: nickname,
           userId: uniqueId,
           profilePictureUrl,
@@ -398,7 +401,8 @@ io.on('connection', (socket: any) => {
       // 配信終了イベントの監視
       tiktokConnect.on('streamEnd', () => {
         console.log(`Stream ended for ${username}`);
-        emitCurrent('tiktok-status', { status: 'disconnected', message: '配信が終了しました。' });
+        emitCurrent('tiktok-status', { status: 'disconnected', reason: 'stream-ended', message: '配信が終了しました。' });
+        closeTikTok(socket.id);
       });
 
     } catch (error: any) {

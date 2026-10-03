@@ -1,3 +1,4 @@
+import { EventDeduplicator, giftSpeech } from './services/liveEvents'
 import { registeredBirthdate } from './services/registeredBirthdate'
 import { ListenerManager } from './components/ListenerManager'
 import { removeEmoji } from './services/tts'
@@ -104,6 +105,7 @@ interface TtsSpeechItem {
   hasBirth: boolean
   isRegular: boolean
   isGift: boolean
+  giftCount?: number
   giftName?: string
   timestamp: number
 }
@@ -281,6 +283,13 @@ export default function App() {
   // 読み上げ用の音声トリガーキュー
   const [ttsSpeechQueue, setTtsSpeechQueue] = useState<TtsSpeechItem[]>([])
   const setTtsSpeechTrigger = (item: TtsSpeechItem) => setTtsSpeechQueue(queue => [...queue, item])
+  const receivedEventsRef = useRef(new EventDeduplicator())
+  const spokenItemsRef = useRef(new WeakSet<TtsSpeechItem>())
+  const stopLiveSpeech = () => {
+    setTtsSpeechQueue([])
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    activeSpeechRef.current.clear()
+  }
   const activeSpeechRef = useRef(new Set<SpeechSynthesisUtterance>())
 
   // スクロール自動追従用の参照
@@ -409,12 +418,14 @@ export default function App() {
     setTtsSpeechQueue([])
     if (!isTtsEnabled) return
     for (const item of ttsSpeechQueue) {
+      if (spokenItemsRef.current.has(item)) continue
+      spokenItemsRef.current.add(item)
       const { username, comment, hasBirth, isRegular, isGift, giftName } = item
       const displayName = removeEmoji(username).slice(0, 12) || 'ゲスト'
     
       let text = ''
       if (isGift) {
-        text = `${displayName}さんから、ギフト「${giftName}」を頂きました！`
+        text = giftSpeech(displayName, giftName || 'ギフト', item.giftCount)
       } else {
         if (ttsMode === 'all') {
           text = `${displayName}さん。「${comment}」`
@@ -439,6 +450,7 @@ export default function App() {
     profilePictureUrl?: string
     timestamp: number
   }) => {
+    if (!receivedEventsRef.current.accept(`chat:${msg.userId}:${msg.id}`)) return
     void saveListenerChat(msg).catch(() => setSystemAlert('チャット履歴を保存できませんでした。ブラウザーの保存容量・設定を確認してください。'))
     setRegulars(previous => {
       const user = previous[msg.userId]
@@ -599,11 +611,12 @@ export default function App() {
     })
 
     newSocket.on('disconnect', () => {
+      stopLiveSpeech()
       setServerConnected(false)
       setTiktokConnected('disconnected')
     })
 
-    newSocket.on('tiktok-status', (data: { status: 'connected' | 'disconnected' | 'error', username?: string, error?: string }) => {
+    newSocket.on('tiktok-status', (data: { status: 'connected' | 'disconnected' | 'error', username?: string, error?: string, reason?: string }) => {
       if (data.status === 'connected') {
         setTiktokConnected('connected')
         setErrorMessage('')
@@ -611,7 +624,9 @@ export default function App() {
         setTiktokConnected('error')
         setErrorMessage(data.error || 'TikTok Liveへの接続中にエラーが発生しました。配信中であることを確認してください。')
       } else {
-        setTiktokConnected('disconnected')
+        stopLiveSpeech()
+        setTiktokConnected(data.reason === 'stream-ended' ? 'error' : 'disconnected')
+        if (data.reason === 'stream-ended') setErrorMessage('配信が終了しました。次のLIVEを待っています。')
       }
     })
 
@@ -620,6 +635,7 @@ export default function App() {
     })
 
     newSocket.on('gift-log', (gift: { id: string; username: string; userId: string; profilePictureUrl?: string; giftName: string; diamonds: number; count: number; timestamp: number }) => {
+      if (!receivedEventsRef.current.accept(`gift:${gift.userId}:${gift.id}`)) return
       setTransactions(prev => [
         {
           id: gift.id,
@@ -636,7 +652,7 @@ export default function App() {
 
       let isRegularMatch = false
       setRegulars(prevRegs => {
-        const user = prevRegs[gift.userId] || {
+        const user = { ...(prevRegs[gift.userId] || {
           userId: gift.userId,
           username: gift.username,
           profilePictureUrl: gift.profilePictureUrl,
@@ -645,7 +661,7 @@ export default function App() {
           history: [],
           totalDiamonds: 0,
           totalPayPay: 0
-        }
+        }) }
 
         user.totalDiamonds += gift.diamonds
         user.username = gift.username 
@@ -689,6 +705,7 @@ export default function App() {
         isRegular: isRegularMatch,
         isGift: true,
         giftName: gift.giftName,
+        giftCount: gift.count,
         timestamp: Date.now()
       })
     })
