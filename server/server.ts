@@ -367,6 +367,13 @@ io.on('connection', (socket: any) => {
         }
       });
 
+      // superFan means a new membership; superFanJoin means an existing member entering.
+      tiktokConnect.on('superFan', (data: any) => {
+        const id = data.common?.msgId;
+        if (!id) return; // Without a stable ID a replay cannot be safely distinguished.
+        emitCurrent('fan-club-new-member', { id: String(id), broadcaster: username });
+      });
+
       // ギフトイベントの監視
       tiktokConnect.on('gift', (data: any) => {
         const completed = completedGift(data);
