@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { generateFortuneText, fortuneModels } from '../server/geminiGeneration.ts';
+const error = status => Object.assign(new Error('API failure'), { status });
+const calls=[];
+assert.equal(await generateFortuneText(async model => { calls.push(model); if (calls.length===1) throw error(429); return '{"summary":"ok"}'; }), '{"summary":"ok"}');
+assert.deepEqual(calls,fortuneModels.slice(0,2));
+let retries=0;
+await assert.rejects(generateFortuneText(async model => { retries++; throw error(model===fortuneModels[0]?429:404); },async()=>{throw Error('Should not retry quota');}), /利用上限/);
+assert.equal(retries,3);
+let authCalls=0;
+await assert.rejects(generateFortuneText(async()=>{authCalls++;throw error(403);}),/APIキー/);assert.equal(authCalls,1);
+let temporary=0;const waits=[];
+assert.equal(await generateFortuneText(async()=>{if(temporary++<2)throw error(503);return 'ok';},async ms=>waits.push(ms)),'ok');
+assert.deepEqual(waits,[1000,2000]);
+console.log('PASS quota fallback, preserve quota error, auth stop, temporary retry');
