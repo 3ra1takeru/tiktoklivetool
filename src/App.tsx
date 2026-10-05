@@ -1,3 +1,4 @@
+import { FanClubSound } from './services/fanClubSound'
 import { EventDeduplicator, giftSpeech } from './services/liveEvents'
 import { registeredBirthdate } from './services/registeredBirthdate'
 import { ListenerManager } from './components/ListenerManager'
@@ -280,12 +281,39 @@ export default function App() {
     return localStorage.getItem('fortune_tts_voice_uri') || ''
   })
 
+  const [fanSoundEnabled, setFanSoundEnabled] = useState(() => localStorage.getItem('fortune_fan_sound') !== 'false')
+  const fanSoundEnabledRef = useRef(fanSoundEnabled)
+  const fanSoundRef = useRef(new FanClubSound())
+  useEffect(() => {
+    fanSoundEnabledRef.current = fanSoundEnabled
+    localStorage.setItem('fortune_fan_sound', String(fanSoundEnabled))
+    if (!fanSoundEnabled) fanSoundRef.current.stop()
+  }, [fanSoundEnabled])
+  useEffect(() => {
+    const sound = fanSoundRef.current
+    const unlock = () => { if (fanSoundEnabledRef.current) sound.unlock() }
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+      sound.dispose()
+    }
+  }, [])
+  const testFanSound = () => {
+    fanSoundRef.current.unlock()
+    void fanSoundRef.current.play().then(played => {
+      if (!played) setSystemAlert('効果音を再生できませんでした。端末の音量を確認して、もう一度試聴してください。')
+    })
+  }
+
   // 読み上げ用の音声トリガーキュー
   const [ttsSpeechQueue, setTtsSpeechQueue] = useState<TtsSpeechItem[]>([])
   const setTtsSpeechTrigger = (item: TtsSpeechItem) => setTtsSpeechQueue(queue => [...queue, item])
   const receivedEventsRef = useRef(new EventDeduplicator())
   const spokenItemsRef = useRef(new WeakSet<TtsSpeechItem>())
   const stopLiveSpeech = () => {
+    fanSoundRef.current.stop()
     setTtsSpeechQueue([])
     if ('speechSynthesis' in window) window.speechSynthesis.cancel()
     activeSpeechRef.current.clear()
@@ -632,6 +660,14 @@ export default function App() {
 
     newSocket.on('chat-log', (msg: ChatMessage) => {
       processIncomingChat(msg)
+    })
+
+    newSocket.on('fan-club-new-member', (event: { id: string; broadcaster: string }) => {
+      if (!receivedEventsRef.current.accept(`fan:${event.broadcaster}:${event.id}`)) return
+      if (!fanSoundEnabledRef.current) return
+      void fanSoundRef.current.play().then(played => {
+        if (!played) setSystemAlert('ハートミーの新規参加がありました。効果音を鳴らすには設定の「効果音を試聴」を一度押してください。')
+      })
     })
 
     newSocket.on('gift-log', (gift: { id: string; username: string; userId: string; profilePictureUrl?: string; giftName: string; diamonds: number; count: number; timestamp: number }) => {
@@ -2012,6 +2048,19 @@ ${res.advice}
                   placeholder="AIZASy..."
                   className="h-8 text-xs bg-beige-50/50"
                 />
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-beige-200">
+                <label className="flex items-center gap-2 text-sm font-bold text-sage-800">
+                  <input type="checkbox" checked={fanSoundEnabled} onChange={e => {
+                    setFanSoundEnabled(e.target.checked)
+                    if (e.target.checked) fanSoundRef.current.unlock()
+                  }} className="accent-gold-500" />
+                  ハートミー新規参加の効果音
+                </label>
+                <p className="text-xs text-sage-600">初めてファンクラブに参加した時に、レベルアップ風の音を鳴らします。既存メンバーの入室では鳴りません。</p>
+                <Button variant="outline" size="sm" onClick={testFanSound}>効果音を試聴</Button>
+                <p className="text-xs text-sage-600">iPadでは配信前に一度試聴し、端末の音量をご確認ください。</p>
               </div>
 
               {/* 読み上げ設定 */}
