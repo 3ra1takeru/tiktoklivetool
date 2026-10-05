@@ -1,3 +1,4 @@
+import { generateFortuneText } from './geminiGeneration.js';
 import { completedGift } from './giftEvents.js';
 import express from 'express';
 import { createServer } from 'http';
@@ -186,63 +187,12 @@ JSON構造：
 }
 `;
 
-  // 一時的なエラー時にリトライおよび代替モデルへのフォールバックを行う
-  const modelsToTry = ['gemini-3.5-flash', 'gemini-1.5-flash'];
-  let lastError: any = null;
-  let responseText = '';
-
-  for (const modelName of modelsToTry) {
-    try {
-      console.log(`[Gemini API] Trying model: ${modelName}`);
-      const model = genAI.getGenerativeModel({ 
-        model: modelName,
-        generationConfig: {
-          responseMimeType: 'application/json'
-        }
-      });
-
-      const retries = 3;
-      let delay = 1000;
-
-      for (let attempt = 0; attempt < retries; attempt++) {
-        try {
-          const result = await model.generateContent(prompt);
-          responseText = result.response.text();
-          break; // 成功したらループを抜ける
-        } catch (error: any) {
-          lastError = error;
-          const errorMsg = error.message || '';
-          
-          // 503 Service Unavailable や 429 Rate Limit やその他の一時的エラーの場合にリトライ
-          const isTemporary = error.status === 503 || error.status === 429 ||
-                              errorMsg.includes('503') || errorMsg.includes('429') ||
-                              errorMsg.includes('Service Unavailable') || errorMsg.includes('Resource has been exhausted') ||
-                              errorMsg.includes('overloaded') || errorMsg.includes('temporary');
-          
-          if (isTemporary && attempt < retries - 1) {
-            console.warn(`[Gemini API] Temporary error on model ${modelName} (Attempt ${attempt + 1}/${retries}): ${errorMsg}. Retrying in ${delay}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            delay *= 2; // 指数バックオフ
-          } else {
-            throw error; // リトライ上限に達した、あるいは致命的エラー
-          }
-        }
-      }
-      
-      // ここに到達したということは、このモデルで成功したということ
-      if (responseText) {
-        console.log(`[Gemini API] Successfully generated content using model: ${modelName}`);
-        break; 
-      }
-    } catch (modelError: any) {
-      console.warn(`[Gemini API] Model ${modelName} failed: ${modelError.message || modelError}`);
-      // 次のモデルを試すためにループを継続
-    }
-  }
-
-  if (!responseText) {
-    throw lastError || new Error('鑑定の生成中にエラーが発生しました。Gemini APIが一時的に利用できないか、制限に達しています。');
-  }
+  const responseText = await generateFortuneText(async modelName => {
+    console.log(`[Gemini API] Trying model: ${modelName}`);
+    const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { responseMimeType: 'application/json' } });
+    const result = await model.generateContent(prompt);
+    return result.response.text();
+  });
 
   // JSONをパースして返す
   try {
