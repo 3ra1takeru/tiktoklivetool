@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { FanClubSound, fanClubNotes } from '../src/services/fanClubSound.ts';
+import { FanClubSound, fanClubNotes, giftNotes, isHeartMeGift } from '../src/services/fanClubSound.ts';
 import { EventDeduplicator } from '../src/services/liveEvents.ts';
 const oscillators = [];
 class Context {
@@ -25,6 +25,14 @@ assert.ok(oscillators[6].startAt >= oscillators[5].stopAt, 'Sounds do not overla
 sound.stop();
 assert.ok(oscillators.every(node => node.stopAt === undefined), 'LIVE end cancels all scheduled notes');
 assert.equal(await sound.play(), true, 'Next LIVE can sound without a new gesture');
+const beforeGift = oscillators.length;
+await sound.play('gift');
+assert.equal(oscillators.length - beforeGift, 2);
+assert.deepEqual(oscillators.slice(beforeGift).map(n => n.frequency.value), giftNotes);
+assert.ok(oscillators.slice(beforeGift).every(n => n.type === 'sine'));
+assert.equal(isHeartMeGift('ハートミー'), true);
+assert.equal(isHeartMeGift('Heart Me'), true);
+assert.equal(isHeartMeGift('バラ'), false);
 sound.dispose();
 assert.equal(await sound.play(), false);
 console.log('PASS: gesture unlock, duplicate membership, original melody, FIFO, LIVE end, next LIVE');
