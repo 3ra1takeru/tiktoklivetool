@@ -1,16 +1,21 @@
 // Original ascending chiptune; no game recording or copied melody.
 export const fanClubNotes = [523.25, 659.25, 783.99, 1046.5, 880, 1174.66]
-export function scheduleFanClubSound(context: AudioContext, start = context.currentTime, active = new Set<OscillatorNode>()): number {
+export const giftNotes = [659.25, 880]
+export function isHeartMeGift(name: string): boolean {
+  return /ハート[・\s]*ミー|heart[\s_-]*me/i.test(name)
+}
+export function scheduleFanClubSound(context: AudioContext, start = context.currentTime, active = new Set<OscillatorNode>(), kind: 'fan' | 'gift' = 'fan'): number {
   let cursor = start
-  fanClubNotes.forEach((frequency, index) => {
-    const duration = index === fanClubNotes.length - 1 ? 0.38 : 0.13
+  const notes = kind === 'fan' ? fanClubNotes : giftNotes
+  notes.forEach((frequency, index) => {
+    const duration = kind === 'gift' ? 0.1 : index === notes.length - 1 ? 0.5 : 0.15
     const oscillator = context.createOscillator()
     const gain = context.createGain()
-    oscillator.type = 'square'
+    oscillator.type = kind === 'fan' ? 'square' : 'sine'
     oscillator.frequency.value = frequency
     gain.gain.setValueAtTime(0, cursor)
-    gain.gain.linearRampToValueAtTime(0.035, cursor + 0.008)
-    gain.gain.setValueAtTime(0.035, cursor + duration - 0.04)
+    gain.gain.linearRampToValueAtTime((kind === 'fan' ? 0.065 : 0.035), cursor + 0.008)
+    gain.gain.setValueAtTime((kind === 'fan' ? 0.065 : 0.035), cursor + duration - 0.04)
     gain.gain.linearRampToValueAtTime(0, cursor + duration)
     oscillator.connect(gain)
     gain.connect(context.destination)
@@ -35,14 +40,14 @@ export class FanClubSound {
     // Called from a tap/click to enable audio on iPad and other browsers.
     if (this.context.state === 'suspended') void this.context.resume().catch(() => {})
   }
-  async play(): Promise<boolean> {
+  async play(kind: 'fan' | 'gift' = 'fan'): Promise<boolean> {
     const context = this.context
     const generation = this.generation
     if (!context || context.state === 'closed') return false
     try {
       if (context.state === 'suspended') await context.resume()
       if (generation !== this.generation || context.state !== 'running') return false
-      this.nextTime = scheduleFanClubSound(context, Math.max(context.currentTime, this.nextTime), this.active)
+      this.nextTime = scheduleFanClubSound(context, Math.max(context.currentTime, this.nextTime), this.active, kind)
       return true
     } catch { return false }
   }

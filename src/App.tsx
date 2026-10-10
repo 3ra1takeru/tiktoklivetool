@@ -1,4 +1,4 @@
-import { FanClubSound } from './services/fanClubSound'
+import { FanClubSound, isHeartMeGift } from './services/fanClubSound'
 import { EventDeduplicator, giftSpeech } from './services/liveEvents'
 import { registeredBirthdate } from './services/registeredBirthdate'
 import { ListenerManager } from './components/ListenerManager'
@@ -686,7 +686,6 @@ export default function App() {
         ...prev
       ])
 
-      let isRegularMatch = false
       setRegulars(prevRegs => {
         const user = { ...(prevRegs[gift.userId] || {
           userId: gift.userId,
@@ -707,7 +706,6 @@ export default function App() {
         localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
 
         if (registeredBirthdate(user)) {
-          isRegularMatch = true
           let combinedBirth = registeredBirthdate(user)
           if (user.birthdates && user.birthdates.length > 0) {
             combinedBirth = user.birthdates
@@ -734,16 +732,12 @@ export default function App() {
         return nextRegs
       })
 
-      setTtsSpeechTrigger({
-        username: gift.username,
-        comment: `ギフト「${gift.giftName}」送信`,
-        hasBirth: false,
-        isRegular: isRegularMatch,
-        isGift: true,
-        giftName: gift.giftName,
-        giftCount: gift.count,
-        timestamp: Date.now()
-      })
+      // Heart Me gets its distinct sound only from the new-membership event.
+      if (fanSoundEnabledRef.current && !isHeartMeGift(gift.giftName)) {
+        void fanSoundRef.current.play('gift').then(played => {
+          if (!played) setSystemAlert('効果音を鳴らすには設定の「通常ギフト音を試聴」を一度押してください。')
+        })
+      }
     })
 
     newSocket.on('fortune-progress', (data: { id: string, status: 'loading' }) => {
@@ -2056,10 +2050,11 @@ ${res.advice}
                     setFanSoundEnabled(e.target.checked)
                     if (e.target.checked) fanSoundRef.current.unlock()
                   }} className="accent-gold-500" />
-                  ハートミー新規参加の効果音
+                  ギフト・新規ハートミーの効果音
                 </label>
-                <p className="text-xs text-sage-600">初めてファンクラブに参加した時に、レベルアップ風の音を鳴らします。既存メンバーの入室では鳴りません。</p>
-                <Button variant="outline" size="sm" onClick={testFanSound}>効果音を試聴</Button>
+                <p className="text-xs text-sage-600">通常ギフトは短い通知音、新規ハートミーは目立つレベルアップ音。ギフト名は読み上げません。既存メンバーの入室では特別な音は鳴りません。</p>
+                <Button variant="outline" size="sm" onClick={testFanSound}>新規ハートミー音を試聴</Button>
+                <Button variant="outline" size="sm" onClick={() => { fanSoundRef.current.unlock(); void fanSoundRef.current.play('gift') }}>通常ギフト音を試聴</Button>
                 <p className="text-xs text-sage-600">iPadでは配信前に一度試聴し、端末の音量をご確認ください。</p>
               </div>
 
