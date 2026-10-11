@@ -23,7 +23,10 @@ export default async function handler(req, res) {
       const body = await response.text();
       const data = source === 'api' ? JSON.parse(body) : JSON.parse(body.match(/<script\b[^>]*\bid=["']SIGI_STATE["'][^>]*>([\s\S]*?)<\/script>/i)?.[1] || '{}');
       const user = source === 'api' ? data?.data?.user : data?.LiveRoom?.liveRoomUserInfo?.user;
-      if (validRoomId(user?.roomId)) return res.status(200).json({ username, roomId: user.roomId });
+      const room = source === 'api' ? data?.data?.liveRoom : data?.LiveRoom?.liveRoomUserInfo?.liveRoom;
+      const status = Number(room?.status);
+      if (status === 4 || (user && String(user.roomId) === '0')) return res.status(200).json({ username, live: false });
+      if (validRoomId(user?.roomId) && Number.isFinite(status) && status > 0) return res.status(200).json({ username, roomId: user.roomId, live: true });
       sources.push({ source, status: response.status, reason: body ? 'ROOM_ID_MISSING' : 'EMPTY_RESPONSE' });
     } catch (error) {
       sources.push({ source, reason: error?.name === 'TimeoutError' ? 'TIMEOUT' : 'INVALID_RESPONSE' });
