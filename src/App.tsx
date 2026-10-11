@@ -649,6 +649,7 @@ export default function App() {
         setTiktokConnected('connected')
         setErrorMessage('')
       } else if (data.status === 'error') {
+        if (data.reason === 'sign-rate-limit') setAutoPaused(true)
         setTiktokConnected('error')
         setErrorMessage(data.error || 'TikTok Liveへの接続中にエラーが発生しました。配信中であることを確認してください。')
       } else {

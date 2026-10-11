@@ -1,3 +1,4 @@
+import { signatureCooldown } from './signCooldown.js';
 import { generateFortuneText } from './geminiGeneration.js';
 import { completedGift } from './giftEvents.js';
 import express from 'express';
@@ -39,6 +40,7 @@ const apiKey = process.env.GEMINI_API_KEY || '';
 const genAI = apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE' ? new GoogleGenerativeAI(apiKey) : null;
 
 // アクティブなTikTok接続の管理
+let signingBlockedUntil = 0;
 const activeConnections = new Map<string, TikTokLiveConnection>();
 
 function closeTikTok(socketId: string) {
@@ -69,6 +71,7 @@ function connectionError(error: any): string {
   if (/retrieve Room ID|SIGI_STATE/i.test(detail)) return 'TikTokの配信情報を取得できませんでした。しばらく待って再接続してください。';
   if (/offline|not live/i.test(detail)) return 'このアカウントは現在LIVE中ではありません。ユーザーIDと配信状況を確認してください。';
   if (/business plan|premium|purchase/i.test(detail)) return '署名サービスの有料機能が要求されました。サーバーの接続設定を確認してください。';
+  if (signatureCooldown(error)) return 'TikTok接続サービスの接続回数上限に達しました。自動再試行を停止しています。利用枠の回復または無料APIキーの設定が必要です。';
   if (/sign|euler|429|rate.?limit|api.?key/i.test(detail)) {
     return 'TikTok接続用の署名サービスでエラーが発生しました。サーバーのEULER_STREAM_API_KEY設定や利用制限を確認してください。';
   }
@@ -224,9 +227,25 @@ io.on('connection', (socket: any) => {
     console.log(`Request to connect to TikTok Live: ${username}`);
     
     closeTikTok(socket.id);
+    const attempt = socket.data.liveAttempt = (socket.data.liveAttempt || 0) + 1;
 
     try {
       username = normalizeUsername(username);
+      if (Date.now() < signingBlockedUntil) {
+        socket.emit('tiktok-status', { status: 'error', reason: 'sign-rate-limit', error: '接続回数上限の回復を待っています。無料APIキー設定後はサーバーを再起動してください。' });
+        return;
+      }
+      // Check public live status before invoking the signing service.
+      const lookupUrl = new URL('/api/tiktok-room', 'https://tiktoklivetool.vercel.app');
+      lookupUrl.searchParams.set('username', username);
+      const lookup = await fetch(lookupUrl, { signal: AbortSignal.timeout(18000) });
+      if (!socket.connected || socket.data.liveAttempt !== attempt) return;
+      const room = lookup.ok ? await lookup.json() as { username?: string; roomId?: string; live?: boolean } : null;
+      if (room?.username !== username || room.live !== true || !room.roomId) {
+        socket.emit('tiktok-status', { status: 'error', error: room?.live === false ? '現在LIVE中ではありません。配信開始を待っています。' : '配信状況を確認できませんでした。少し待って再確認します。' });
+        return;
+      }
+      if (!socket.connected || socket.data.liveAttempt !== attempt) return;
       const tiktokConnect = new TikTokLiveConnection(username, {
         signApiKey: process.env.EULER_STREAM_API_KEY || undefined,
         enableExtendedGiftInfo: false
@@ -244,22 +263,8 @@ io.on('connection', (socket: any) => {
       // 古い接続から遅れて届いたイベントを新しい接続へ混ぜない
       const emitCurrent = (event: string, data: any) => { if (isCurrent()) emit(event, data); };
       const connect = async () => {
-        try {
-          return await tiktokConnect.connect();
-        } catch (error: any) {
-          if (!isCurrent() || !/retrieve Room ID|SIGI_STATE/i.test(error?.message || '')) throw error;
-          console.log(`[TikTok] Trying Vercel room lookup for ${username}`);
-          const lookupUrl = new URL('/api/tiktok-room', 'https://tiktoklivetool.vercel.app');
-          lookupUrl.searchParams.set('username', username);
-          const response = await fetch(lookupUrl, { signal: AbortSignal.timeout(18000) });
-          if (!response.ok) throw error;
-          const data = await response.json() as { username?: string; roomId?: string };
-          if (data.username !== username || typeof data.roomId !== 'string' || !/^[1-9]\d{15,21}$/.test(data.roomId)) throw error;
-          if (!isCurrent()) throw error;
-          // The cloud HTML/API lookup failed. The signer checks the supplied live room.
-          tiktokConnect.options.fetchRoomInfoOnConnect = false;
-          return await tiktokConnect.connect(data.roomId);
-        }
+        tiktokConnect.options.fetchRoomInfoOnConnect = false;
+        return tiktokConnect.connect(room.roomId);
       };
       connect().then((state: any) => {
         connecting = false;
@@ -271,7 +276,9 @@ io.on('connection', (socket: any) => {
         clearTimeout(timeout);
         console.error(`Failed to connect to TikTok Live for ${username}:`, err);
         if (!isCurrent()) return;
-        emitCurrent('tiktok-status', { status: 'error', error: connectionError(err) });
+        const cooldown = signatureCooldown(err);
+        if (cooldown) signingBlockedUntil = Date.now() + cooldown;
+        emitCurrent('tiktok-status', { status: 'error', reason: cooldown ? 'sign-rate-limit' : undefined, error: connectionError(err) });
         closeTikTok(socket.id);
       });
       tiktokConnect.on('disconnected', () => {
@@ -352,7 +359,10 @@ io.on('connection', (socket: any) => {
       // エラーイベントの監視
       tiktokConnect.on('error', (err: any) => {
         console.error(`TikTok Live error for ${username}:`, err);
-        if (!connecting) emitCurrent('tiktok-status', { status: 'error', error: connectionError(err) });
+        if (connecting || !isCurrent()) return;
+        const cooldown = signatureCooldown(err);
+        if (cooldown) signingBlockedUntil = Date.now() + cooldown;
+        emitCurrent('tiktok-status', { status: 'error', reason: cooldown ? 'sign-rate-limit' : undefined, error: connectionError(err) });
       });
 
       // 配信終了イベントの監視
@@ -370,6 +380,7 @@ io.on('connection', (socket: any) => {
 
   // TikTok Live切断要求
   socket.on('leave-tiktok', () => {
+    socket.data.liveAttempt = (socket.data.liveAttempt || 0) + 1;
     closeTikTok(socket.id);
     socket.emit('tiktok-status', { status: 'disconnected' });
   });
