@@ -33,6 +33,8 @@ assert.ok(oscillators.slice(beforeGift).every(n => n.type === 'sine'));
 assert.equal(isHeartMeGift('ハートミー'), true);
 assert.equal(isHeartMeGift('Heart Me'), true);
 assert.equal(isHeartMeGift('バラ'), false);
+sound.context.state = 'interrupted';
+assert.equal(await sound.play(), true, 'iOS interrupted audio resumes');
 sound.dispose();
 assert.equal(await sound.play(), false);
 console.log('PASS: gesture unlock, duplicate membership, original melody, FIFO, LIVE end, next LIVE');
