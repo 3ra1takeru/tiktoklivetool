@@ -3,13 +3,16 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { RegularUser } from './listenerTypes'
 import type { ListenerChat } from './listenerHistory'
 
+const deployedUrl = import.meta.env?.VITE_SUPABASE_URL || (import.meta.env?.PROD ? 'https://wshuwwpuehuxdvrmijrm.supabase.co' : '')
+const deployedKey = import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY || (import.meta.env?.PROD ? 'sb_publishable_756xArpq6PPEtV4IADwKQw_cPW9PKpC' : '')
+
 let client: SupabaseClient | undefined
 const snapshots = new Map<string, { profile: RegularUser, revision: number }>()
 let writeChain: Promise<unknown> = Promise.resolve()
 export function cloudSettings() {
   return {
-    url: import.meta.env?.VITE_SUPABASE_URL || (typeof localStorage !== 'undefined' ? localStorage.getItem('fortune_supabase_url') : '') || '',
-    key: import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY || (typeof localStorage !== 'undefined' ? localStorage.getItem('fortune_supabase_key') : '') || ''
+    url: deployedUrl || (typeof localStorage !== 'undefined' ? localStorage.getItem('fortune_supabase_url') : '') || '',
+    key: deployedKey || (typeof localStorage !== 'undefined' ? localStorage.getItem('fortune_supabase_key') : '') || ''
   }
 }
 export function cloudConfigured() {
@@ -19,7 +22,7 @@ export function cloudConfigured() {
 export function configureCloud(url: string, key: string) {
   key = key.trim()
   const parsed = new URL(url)
-  if (import.meta.env?.VITE_SUPABASE_URL && (parsed.origin !== import.meta.env.VITE_SUPABASE_URL || key !== import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY)) throw new Error('公開サイトの接続先は運営者が設定しています。現在の設定を使用してください。')
+  if (deployedUrl && (parsed.origin !== deployedUrl || key !== deployedKey)) throw new Error('公開サイトの接続先は運営者が設定しています。現在の設定を使用してください。')
   if (parsed.protocol !== 'https:' || !parsed.hostname.endsWith('.supabase.co')) throw new Error('SupabaseのProject URLを入力してください。')
   if (!key.trim() || key.startsWith('sb_secret_')) throw new Error('Publishable keyを入力してください。シークレットキーは使用できません。')
   if (key.startsWith('ey')) {
