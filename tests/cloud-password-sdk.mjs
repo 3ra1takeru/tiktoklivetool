@@ -9,7 +9,11 @@ const password='synthetic-test-password'
 const client=createClient('https://example.supabase.co','sb_publishable_test',{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},global:{fetch:async (input,init={}) => {
   const url=new URL(typeof input==='string'?input:input.url);paths.push(url.pathname)
   if(url.pathname==='/auth/v1/user') {
-    if(init.method==='PUT') assert.deepEqual(JSON.parse(init.body),{password})
+    if(init.method==='PUT') {
+      const body=JSON.parse(init.body)
+      assert.equal(body.password,password)
+      assert.equal(body.email,undefined,'Password setup must not change the identity email')
+    }
     return new Response(JSON.stringify(user),{headers:{'content-type':'application/json'}})
   }
   if(url.pathname==='/auth/v1/token') {
