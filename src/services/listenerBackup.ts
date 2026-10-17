@@ -1,5 +1,5 @@
 import { registeredBirthdate } from './registeredBirthdate.ts'
-import type { RegularUser } from '../App'
+import type { RegularUser } from './listenerTypes'
 
 export function mergeListener(existing: RegularUser | undefined, incoming: RegularUser): RegularUser {
   const records = [...(existing?.birthdates || []), ...(incoming.birthdates || [])]
@@ -12,6 +12,7 @@ export function mergeListener(existing: RegularUser | undefined, incoming: Regul
   const history = [...(existing?.history || []), ...incoming.history].filter((item, index, all) => all.findIndex(other => other.timestamp === item.timestamp && other.birthdate === item.birthdate) === index).sort((a, b) => b.timestamp - a.timestamp)
   return {
     ...incoming, ...existing,
+    prefecture: existing?.prefecture || incoming.prefecture || '',
     birthdate: registeredBirthdate(existing) || registeredBirthdate(incoming),
     birthdates, history,
     totalDiamonds: Math.max(existing?.totalDiamonds || 0, incoming.totalDiamonds),

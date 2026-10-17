@@ -38,14 +38,22 @@ export class FanClubSound {
     if (!Constructor) return
     this.context ??= new Constructor()
     // Called from a tap/click to enable audio on iPad and other browsers.
-    if (this.context.state === 'suspended') void this.context.resume().catch(() => {})
+    if (this.context.state !== 'running') void this.context.resume().catch(() => {})
+    // iOS may require starting a source during the gesture as well as resuming.
+    if (this.context.createBufferSource && this.context.createBuffer) {
+      const source = this.context.createBufferSource()
+      source.buffer = this.context.createBuffer(1, 1, this.context.sampleRate)
+      source.connect(this.context.destination)
+      source.onended = () => source.disconnect()
+      source.start(0)
+    }
   }
   async play(kind: 'fan' | 'gift' = 'fan'): Promise<boolean> {
     const context = this.context
     const generation = this.generation
     if (!context || context.state === 'closed') return false
     try {
-      if (context.state === 'suspended') await context.resume()
+      if (context.state !== 'running') await context.resume()
       if (generation !== this.generation || context.state !== 'running') return false
       this.nextTime = scheduleFanClubSound(context, Math.max(context.currentTime, this.nextTime), this.active, kind)
       return true

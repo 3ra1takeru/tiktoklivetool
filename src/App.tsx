@@ -1,6 +1,10 @@
+import { migrateBrowserListeners } from './services/cloudMigration'
 import { FanClubSound, isHeartMeGift } from './services/fanClubSound'
 import { EventDeduplicator, giftSpeech } from './services/liveEvents'
 import { registeredBirthdate } from './services/registeredBirthdate'
+import { CloudStoragePanel } from './components/CloudStoragePanel'
+import { cloudConfigured, cloudClient, saveCloudUser } from './services/cloudStorage'
+import type { BirthdateRecord, RegularUser } from './services/listenerTypes'
 import { ListenerManager } from './components/ListenerManager'
 import { removeEmoji } from './services/tts'
 import { saveListenerChat, getListenerChats, type ListenerChat } from './services/listenerHistory'
@@ -62,32 +66,6 @@ interface FortuneRequest {
   isRegularMatch?: boolean
 }
 
-interface FortuneHistoryItem {
-  timestamp: number
-  birthdate: string
-  comment: string
-  summary: string
-}
-
-export interface BirthdateRecord {
-  id: string
-  birthdate: string
-  name: string
-  relationship: string
-  gender?: 'male' | 'female' | 'unspecified'
-}
-
-export interface RegularUser {
-  userId: string
-  username: string
-  profilePictureUrl?: string
-  birthdate: string
-  birthdates?: BirthdateRecord[]
-  lastFortuneAt?: number
-  history: FortuneHistoryItem[]
-  totalDiamonds: number
-  totalPayPay: number
-}
 
 interface TransactionItem {
   id: string
@@ -204,6 +182,12 @@ export default function App() {
   const [autoConnect, setAutoConnect] = useState(() => localStorage.getItem('fortune_auto_connect') === 'true')
   const [tempAutoConnect, setTempAutoConnect] = useState(autoConnect)
   const [autoPaused, setAutoPaused] = useState(false)
+  const [cloudPanelOpen, setCloudPanelOpen] = useState(false)
+  const [cloudGeneration, setCloudGeneration] = useState(0)
+  const [cloudReady, setCloudReady] = useState(false)
+  const cloudReadyRef = useRef(false)
+  const cloudSavedProfiles = useRef(new Map<string, string>())
+  const [cloudStatus, setCloudStatus] = useState(cloudConfigured() ? 'クラウド読込中' : 'ブラウザー保存（未移行）')
   const [managerOpen, setManagerOpen] = useState(false)
   const [historyUser, setHistoryUser] = useState<string | null>(null)
   const [storedChats, setStoredChats] = useState<ListenerChat[]>([])
@@ -235,10 +219,65 @@ export default function App() {
   // 常連データ（LocalStorage）
   const [regulars, setRegulars] = useState<Record<string, RegularUser>>(() => {
     try {
+      if (cloudConfigured()) return {}
       const saved = localStorage.getItem('star_campe_regulars')
       return saved ? Object.fromEntries(Object.entries(JSON.parse(saved) as Record<string, RegularUser>).map(([id, user]) => [id, { ...user, birthdate: registeredBirthdate(user) }])) : {}
     } catch { return {} }
   })
+
+  function persistRegulars(serialized: string) {
+    if (!cloudConfigured()) localStorage.setItem('star_campe_regulars', serialized)
+  }
+
+  useEffect(() => {
+    if (!cloudConfigured()) return
+    let active = true
+    cloudReadyRef.current = false
+    setCloudReady(false)
+    setCloudStatus('クラウド読込中')
+    let loading = false
+    const load = async () => {
+      if (loading || !active) return
+      loading = true
+      try {
+        const users = await migrateBrowserListeners(message => { if (active) setCloudStatus(message) })
+        if (!active) return
+        cloudSavedProfiles.current = new Map(Object.entries(users).map(([id, user]) => [id, JSON.stringify(user)]))
+        setRegulars(Object.fromEntries(Object.entries(users).map(([id, user]) => [id, { ...user, birthdate: registeredBirthdate(user) }])))
+        cloudReadyRef.current = true
+        setCloudReady(true)
+        setCloudStatus('クラウド保存')
+      } catch {
+        if (!active) return
+        setCloudStatus('クラウド未接続')
+        setSystemAlert('クラウド保存のログイン・DB設定を確認してください。接続できるまで新しいデータは保存できません。')
+      } finally { loading = false }
+    }
+    void load()
+    const { data } = cloudClient().auth.onAuthStateChange(event => {
+      if (event === 'SIGNED_IN' && !cloudReadyRef.current) window.setTimeout(() => { if (active) void load() }, 0)
+      if (event === 'SIGNED_OUT') { cloudReadyRef.current = false; setCloudReady(false); setRegulars({}); setCloudStatus('クラウド未接続') }
+    })
+    return () => { active = false; data.subscription.unsubscribe() }
+  }, [cloudGeneration])
+
+  useEffect(() => {
+    if (!cloudConfigured() || !cloudReady) return
+    for (const [id, user] of Object.entries(regulars)) {
+      const serialized = JSON.stringify(user)
+      if (cloudSavedProfiles.current.get(id) === serialized) continue
+      cloudSavedProfiles.current.set(id, serialized)
+      void saveCloudUser(structuredClone(user)).catch(() => {
+        cloudSavedProfiles.current.delete(id)
+        setCloudStatus('クラウド保存失敗')
+        setSystemAlert('リスナー情報をクラウドへ保存できませんでした。通信状態を確認してください。保存済みとは扱わないでください。')
+      })
+    }
+  }, [regulars, cloudReady])
+
+  useEffect(() => {
+    if (cloudConfigured() && !cloudReady) socket?.emit('leave-tiktok')
+  }, [cloudReady, cloudGeneration, socket])
 
   // PayPay手動追加用
   const [paypayUser, setPaypayUser] = useState('')
@@ -292,9 +331,13 @@ export default function App() {
   useEffect(() => {
     const sound = fanSoundRef.current
     const unlock = () => { if (fanSoundEnabledRef.current) sound.unlock() }
+    window.addEventListener('touchend', unlock)
+    window.addEventListener('click', unlock)
     window.addEventListener('pointerdown', unlock)
     window.addEventListener('keydown', unlock)
     return () => {
+      window.removeEventListener('touchend', unlock)
+      window.removeEventListener('click', unlock)
       window.removeEventListener('pointerdown', unlock)
       window.removeEventListener('keydown', unlock)
       sound.dispose()
@@ -478,14 +521,15 @@ export default function App() {
     profilePictureUrl?: string
     timestamp: number
   }) => {
+    if (cloudConfigured() && !cloudReadyRef.current) { setSystemAlert('クラウド保存にログインしてから接続してください。'); return }
     if (!receivedEventsRef.current.accept(`chat:${msg.userId}:${msg.id}`)) return
-    void saveListenerChat(msg).catch(() => setSystemAlert('チャット履歴を保存できませんでした。ブラウザーの保存容量・設定を確認してください。'))
+    void saveListenerChat(msg).catch(() => setSystemAlert('チャット履歴を保存できませんでした。保存先への接続・容量を確認してください。'))
     setRegulars(previous => {
       const user = previous[msg.userId]
       const next = { ...previous, [msg.userId]: user
         ? { ...user, username: msg.username, profilePictureUrl: msg.profilePictureUrl || user.profilePictureUrl }
         : { userId: msg.userId, username: msg.username, profilePictureUrl: msg.profilePictureUrl, birthdate: '', birthdates: [], history: [], totalDiamonds: 0, totalPayPay: 0 } }
-      try { localStorage.setItem('star_campe_regulars', JSON.stringify(next)) }
+      try { persistRegulars(JSON.stringify(next)) }
       catch { setSystemAlert('リスナー情報を保存できませんでした。ブラウザーの保存容量を確認してください。') }
       return next
     })
@@ -582,7 +626,7 @@ export default function App() {
               totalPayPay: 0
             }
           }
-          localStorage.setItem('star_campe_regulars', JSON.stringify(next))
+          persistRegulars(JSON.stringify(next))
           return next
         } else {
           const birthdatesList = user.birthdates || [
@@ -600,7 +644,7 @@ export default function App() {
             user.birthdates = [...birthdatesList, newRecord]
             if (!user.birthdate) user.birthdate = extractedBirth!
             const nextRegs = { ...prevRegs, [msg.userId]: user }
-            localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+            persistRegulars(JSON.stringify(nextRegs))
             return nextRegs
           }
         }
@@ -704,7 +748,7 @@ export default function App() {
         user.profilePictureUrl = gift.profilePictureUrl 
 
         const nextRegs = { ...prevRegs, [gift.userId]: user }
-        localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+        persistRegulars(JSON.stringify(nextRegs))
 
         if (registeredBirthdate(user)) {
           let combinedBirth = registeredBirthdate(user)
@@ -781,7 +825,7 @@ export default function App() {
   }, [chatLogs])
 
   useEffect(() => {
-    if (!autoConnect || autoPaused || !savedBroadcaster || !serverConnected || !socket) return
+    if (!autoConnect || autoPaused || !savedBroadcaster || !serverConnected || !socket || (cloudConfigured() && !cloudReady)) return
     if (tiktokConnected === 'connected' || tiktokConnected === 'connecting') return
     const timer = window.setTimeout(() => {
       setTiktokUsername(savedBroadcaster)
@@ -790,7 +834,7 @@ export default function App() {
       socket.emit('join-tiktok', savedBroadcaster)
     }, tiktokConnected === 'disconnected' ? 1000 : 60000)
     return () => window.clearTimeout(timer)
-  }, [autoConnect, autoPaused, savedBroadcaster, serverConnected, socket, tiktokConnected])
+  }, [autoConnect, autoPaused, savedBroadcaster, serverConnected, socket, tiktokConnected, cloudReady])
 
   const openListenerHistory = async (userId: string) => {
     setHistoryUser(userId)
@@ -818,6 +862,7 @@ export default function App() {
 
   // TikTok Liveへの接続処理
   const handleConnectTiktok = () => {
+    if (cloudConfigured() && !cloudReady) { setCloudPanelOpen(true); return }
     setAutoPaused(false)
     if (!socket?.connected || !tiktokUsername.trim()) return
     setTiktokConnected('connecting')
@@ -881,7 +926,7 @@ export default function App() {
       user.profilePictureUrl = req.profilePictureUrl
 
       const nextRegs = { ...prevRegs, [req.userId]: user }
-      localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+      persistRegulars(JSON.stringify(nextRegs))
       return nextRegs
     })
   }
@@ -1041,7 +1086,7 @@ export default function App() {
         })
 
         const nextRegs = { ...prevRegs, [matchedUserId]: user }
-        localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+        persistRegulars(JSON.stringify(nextRegs))
         return nextRegs
       } else {
         const nextRegs = {
@@ -1056,7 +1101,7 @@ export default function App() {
             totalPayPay: amountNum
           }
         }
-        localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+        persistRegulars(JSON.stringify(nextRegs))
         return nextRegs
       }
     })
@@ -1142,7 +1187,7 @@ export default function App() {
           if (tx.type === 'paypay') user.totalPayPay += tx.amount
 
           const next = { ...prevRegs, [tx.userId]: user }
-          localStorage.setItem('star_campe_regulars', JSON.stringify(next))
+          persistRegulars(JSON.stringify(next))
           return next
         })
         setSystemAlert(`${tx.username}様を鑑定待ちに追加しました。`)
@@ -1166,7 +1211,7 @@ export default function App() {
       }
 
       const nextRegs = { ...prevRegs, [userId]: updatedUser }
-      localStorage.setItem('star_campe_regulars', JSON.stringify(nextRegs))
+      persistRegulars(JSON.stringify(nextRegs))
       return nextRegs
     })
   }
@@ -1379,6 +1424,7 @@ ${res.advice}
             </Button>
           </div>
 
+          <Button variant="outline" size="sm" onClick={() => setCloudPanelOpen(true)}>{cloudStatus}</Button>
           <Button variant="outline" size="sm" onClick={() => setManagerOpen(true)}>リスナー管理</Button>
           <Button 
             variant="outline" 
@@ -1973,11 +2019,16 @@ ${res.advice}
       </div>
 
       {/* 設定ダイアログモーダル */}
-      {managerOpen && <ListenerManager users={regulars} onClose={() => setManagerOpen(false)} onSave={user => {
-        // Write synchronously so the manager only reports success after persistence succeeds.
-        const stored = JSON.parse(localStorage.getItem('star_campe_regulars') || '{}')
-        const next = { ...stored, [user.userId]: user }
-        localStorage.setItem('star_campe_regulars', JSON.stringify(next))
+      {cloudPanelOpen && <CloudStoragePanel onClose={() => setCloudPanelOpen(false)} onConfigured={() => setCloudGeneration(value => value + 1)} />}
+      {managerOpen && <ListenerManager users={regulars} onClose={() => setManagerOpen(false)} onSave={async user => {
+        if (cloudConfigured()) {
+          if (!cloudReadyRef.current) throw new Error('クラウドにログインしてください。')
+          await saveCloudUser(user)
+          cloudSavedProfiles.current.set(user.userId, JSON.stringify(user))
+        } else {
+          const stored = JSON.parse(localStorage.getItem('star_campe_regulars') || '{}')
+          persistRegulars(JSON.stringify({ ...stored, [user.userId]: user }))
+        }
         setRegulars(previous => ({ ...previous, [user.userId]: user }))
       }} />}
       {historyUser !== null && (
@@ -2014,7 +2065,7 @@ ${res.advice}
                 <label htmlFor="broadcaster" className="font-bold">配信者のユーザーID</label>
                 <Input id="broadcaster" value={tempBroadcaster} onChange={e => setTempBroadcaster(e.target.value)} placeholder="@near.future.boy" />
                 <label className="flex items-center gap-2"><input type="checkbox" checked={tempAutoConnect} onChange={e => setTempAutoConnect(e.target.checked)} />LIVE開始時に自動接続する</label>
-                <p className="text-sage-500">サイトを開いている間、未接続時は約1分ごとに接続を試みます。接続するとコメントを自動保存します。履歴はこのブラウザーに保存されます。</p>
+                <p className="text-sage-500">サイトを開いている間、未接続時は約1分ごとに接続を試みます。接続するとコメントを自動保存します。クラウド設定後は履歴をSupabaseに保存します。</p>
                 <Button size="sm" onClick={() => { setIsSettingsOpen(false); setManagerOpen(true) }}>保存済みのリスナー履歴</Button>
               </div>
               {/* サーバーURL設定 */}

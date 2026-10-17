@@ -14,39 +14,7 @@ export interface FortuneResult {
   luckyAction?: string;
 }
 
-// 生年月日抽出ロジック
-export function extractBirthDate(text: string): string | null {
-  // パターン1: 1995/10/12, 1995-10-12, 1995.10.12
-  const pattern1 = /(19\d{2}|20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})/;
-  // パターン2: 1995年10月12日
-  const pattern2 = /(19\d{2}|20\d{2})年(\d{1,2})月(\d{1,2})日/;
-  // パターン3: 平成7年10月12日, 令和元年5月1日, 昭和60年
-  const pattern3 = /(昭和|平成|令和)(元|\d{1,2})年(\d{1,2})月(\d{1,2})日/;
-  // パターン4: 8桁の数字 19951012
-  const pattern4 = /\b(19\d{2}|20\d{2})(\d{2})(\d{2})\b/;
-  // パターン5: 6桁の数字 951012
-  const pattern5 = /\b(\d{2})(\d{2})(\d{2})\b/;
-
-  let match;
-  if ((match = text.match(pattern1))) {
-    return `${match[1]}年${match[2]}月${match[3]}日`;
-  }
-  if ((match = text.match(pattern2))) {
-    return `${match[1]}年${match[2]}月${match[3]}日`;
-  }
-  if ((match = text.match(pattern3))) {
-    return `${match[1]}${match[2]}年${match[3]}月${match[4]}日`;
-  }
-  if ((match = text.match(pattern4))) {
-    return `${match[1]}年${parseInt(match[2])}月${parseInt(match[3])}日`;
-  }
-  if ((match = text.match(pattern5))) {
-    const yy = parseInt(match[1]);
-    const year = yy >= 40 ? `19${yy}` : `20${yy}`;
-    return `${year}年${parseInt(match[2])}月${parseInt(match[3])}日`;
-  }
-  return null;
-}
+export { extractBirthDate } from '../../server/birthdate'
 
 // フォールバック（API未設定・オフライン時などのサンプル鑑定データ）
 function generateFallbackFortune(birthdate: string, question: string): FortuneResult {
