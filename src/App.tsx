@@ -1,9 +1,11 @@
+import { BroadcastCaptionPanel } from './components/BroadcastCaptionPanel'
+import { saveBroadcastCaption, type BroadcastCaption } from './services/broadcastCaptions'
 import { migrateBrowserListeners } from './services/cloudMigration'
 import { FanClubSound, isHeartMeGift } from './services/fanClubSound'
 import { EventDeduplicator, giftSpeech } from './services/liveEvents'
 import { registeredBirthdate } from './services/registeredBirthdate'
 import { CloudStoragePanel } from './components/CloudStoragePanel'
-import { cloudConfigured, cloudClient, saveCloudUser } from './services/cloudStorage'
+import { cloudConfigured, cloudClient, cloudOwnerId, saveCloudUser } from './services/cloudStorage'
 import type { BirthdateRecord, RegularUser } from './services/listenerTypes'
 import { ListenerManager } from './components/ListenerManager'
 import { removeEmoji } from './services/tts'
@@ -188,6 +190,25 @@ export default function App() {
   const cloudReadyRef = useRef(false)
   const cloudSavedProfiles = useRef(new Map<string, string>())
   const [cloudStatus, setCloudStatus] = useState(cloudConfigured() ? 'クラウド読込中' : 'ブラウザー保存（未移行）')
+  const [captionsOpen, setCaptionsOpen] = useState(false)
+  const [captionsEnabled, setCaptionsEnabled] = useState(() => localStorage.getItem('fortune_captions_enabled') !== 'false')
+  const captionsEnabledRef = useRef(captionsEnabled)
+  const pendingCaptions = useRef(new Map<string, { caption: BroadcastCaption; owner: string }>())
+  const [pendingCaptionCount, setPendingCaptionCount] = useState(0)
+  useEffect(() => {
+    captionsEnabledRef.current = captionsEnabled
+    localStorage.setItem('fortune_captions_enabled', String(captionsEnabled))
+  }, [captionsEnabled])
+  const persistCaption = async (caption: BroadcastCaption, expectedOwner?: string) => {
+    try {
+      const owner = expectedOwner || await cloudOwnerId()
+      const key = `${owner}:${caption.roomId}:${caption.id}`
+      pendingCaptions.current.set(key, { caption, owner })
+      await saveBroadcastCaption(caption, owner)
+      pendingCaptions.current.delete(key)
+    } catch { setSystemAlert('配信字幕を保存できませんでした。「配信字幕の記録」で受信したアカウントから再保存してください。') }
+    setPendingCaptionCount(pendingCaptions.current.size)
+  }
   const [managerOpen, setManagerOpen] = useState(false)
   const [historyUser, setHistoryUser] = useState<string | null>(null)
   const [storedChats, setStoredChats] = useState<ListenerChat[]>([])
@@ -701,6 +722,12 @@ export default function App() {
         setTiktokConnected(data.reason === 'stream-ended' ? 'error' : 'disconnected')
         if (data.reason === 'stream-ended') setErrorMessage('配信が終了しました。次のLIVEを待っています。')
       }
+    })
+
+    newSocket.on('broadcast-caption', (caption: BroadcastCaption) => {
+      if (!captionsEnabledRef.current || !cloudReadyRef.current) return
+      if (!receivedEventsRef.current.accept(`caption:${caption.roomId}:${caption.id}`)) return
+      void persistCaption(caption)
     })
 
     newSocket.on('chat-log', (msg: ChatMessage) => {
@@ -1426,6 +1453,7 @@ ${res.advice}
 
           <Button variant="outline" size="sm" onClick={() => setCloudPanelOpen(true)}>{cloudStatus}</Button>
           <Button variant="outline" size="sm" onClick={() => setManagerOpen(true)}>リスナー管理</Button>
+          <Button variant="outline" size="sm" onClick={() => setCaptionsOpen(true)}>配信字幕の記録</Button>
           <Button 
             variant="outline" 
             size="icon" 
@@ -2019,6 +2047,7 @@ ${res.advice}
       </div>
 
       {/* 設定ダイアログモーダル */}
+      {captionsOpen && <BroadcastCaptionPanel broadcaster={savedBroadcaster || tiktokUsername} enabled={captionsEnabled} onEnabled={setCaptionsEnabled} pending={pendingCaptionCount} onRetry={async () => { for (const entry of [...pendingCaptions.current.values()]) await persistCaption(entry.caption, entry.owner) }} onClose={() => setCaptionsOpen(false)} />}
       {cloudPanelOpen && <CloudStoragePanel onClose={() => setCloudPanelOpen(false)} onConfigured={() => setCloudGeneration(value => value + 1)} />}
       {managerOpen && <ListenerManager users={regulars} onClose={() => setManagerOpen(false)} onSave={async user => {
         if (cloudConfigured()) {
