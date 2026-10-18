@@ -1,3 +1,4 @@
+import { completedCaption } from './captionEvents.js';
 import { fanMembershipEvent } from './fanEvents.js';
 import { extractBirthDate } from './birthdate.js';
 import { signatureCooldown } from './signCooldown.js';
@@ -290,6 +291,12 @@ io.on('connection', (socket: any) => {
             timestamp: Date.now()
           });
         }
+      });
+
+      // Native TikTok subtitles: no audio upload and no external AI inference.
+      tiktokConnect.on('captionMessage', (data: any) => {
+        const caption = completedCaption(data, username, room.roomId!);
+        if (caption) emitCurrent('broadcast-caption', caption);
       });
 
       // superFan means a new membership; superFanJoin means an existing member entering.
